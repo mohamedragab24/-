@@ -1,0 +1,6 @@
+{
+  "name": "منصة فهمت - كورسات جاهزة وشرح فوري",
+  "description": "منصة تعليمية عربية للربط بين المستفهمين والمفهمين وكورسات مسجلة محمية",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

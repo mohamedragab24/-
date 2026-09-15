@@ -1,0 +1,26 @@
+{
+  "name": "فهمني - منصة التعلم الذكي",
+  "short_name": "فهمني",
+  "description": "أول منصة عربية لخدمات الشرح الفوري والربط بين المفهمين والمستفهمين.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FFFFFF",
+  "theme_color": "#29B6F6",
+  "orientation": "portrait",
+  "scope": "/",
+  "id": "fahimni-app-v1",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/fahimni/192/192",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://picsum.photos/seed/fahimni/512/512",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

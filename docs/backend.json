@@ -1,0 +1,135 @@
+
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "type": "object",
+      "description": "يمثل الملف الشخصي للمستخدم في منصة فهمني.",
+      "properties": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phoneNumber": { "type": "string" },
+        "gender": { "type": "string", "enum": ["male", "female"] },
+        "birthDate": { "type": "string", "format": "date-time" },
+        "role": { "type": "string", "enum": ["mufhem", "mustafhem"] },
+        "profilePictureUrl": { "type": "string", "format": "uri" },
+        "isProfileApproved": { "type": "boolean" },
+        "specialization": { "type": "string" },
+        "bio": { "type": "string" },
+        "isVerified": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["active", "blocked"] },
+        "isAdmin": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "fullName", "email", "role", "gender"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "type": "object",
+      "description": "تذكرة دعم فني.",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "subject": { "type": "string" },
+        "category": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "replied", "closed", "suspended"] },
+        "createdAt": { "type": "string" },
+        "lastUpdate": { "type": "string" },
+        "rating": { "type": "number" }
+      }
+    },
+    "FloatingChat": {
+      "title": "FloatingChat",
+      "type": "object",
+      "description": "محادثة عبر النافذة العائمة.",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "lastMessage": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "replied", "closed"] },
+        "rating": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "type": "object",
+      "description": "رسالة داخل دردشة الدعم.",
+      "properties": {
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "attachmentUrl": { "type": "string" },
+        "isAdmin": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "Job": {
+      "title": "Job",
+      "type": "object",
+      "description": "فرصة وظيفية.",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "requirements": { "type": "string" },
+        "type": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "JobApplication": {
+      "title": "JobApplication",
+      "type": "object",
+      "description": "طلب تقدم لوظيفة.",
+      "properties": {
+        "jobId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userPhone": { "type": "string" },
+        "age": { "type": "string" },
+        "address": { "type": "string" },
+        "experience": { "type": "string" },
+        "createdAt": { "type": "string" }
+      }
+    }
+  },
+  "auth": {
+    "providers": ["password"]
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "ملفات المستخدمين."
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": "SupportTicket",
+      "description": "تذاكر الدعم."
+    },
+    "/supportTickets/{ticketId}/messages/{msgId}": {
+      "schema": "ChatMessage",
+      "description": "رسائل الدردشة في التذاكر."
+    },
+    "/floatingChats/{chatId}": {
+      "schema": "FloatingChat",
+      "description": "المحادثات العائمة."
+    },
+    "/floatingChats/{chatId}/messages/{msgId}": {
+      "schema": "ChatMessage",
+      "description": "رسائل المحادثة العائمة."
+    },
+    "/jobs/{jobId}": {
+      "schema": "Job",
+      "description": "الوظائف المتاحة."
+    },
+    "/jobs/{jobId}/applications/{appId}": {
+      "schema": "JobApplication",
+      "description": "المتقدمون للوظائف."
+    }
+  }
+}

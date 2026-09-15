@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function admin() { return signedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true; }
+    function owner(courseId) { return signedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.instructorId == request.auth.uid; }
+
+    match /courses/{courseId} {
+      allow read: if resource.data.status == 'published' || admin() || (signedIn() && resource.data.instructorId == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.instructorId == request.auth.uid && request.resource.data.status == 'pending';
+      allow update: if admin() || (signedIn() && resource.data.instructorId == request.auth.uid && resource.data.status != 'published' && request.resource.data.status in ['pending','rejected','withdrawn']);
+      allow delete: if admin();
+      match /lessons/{lessonId} {
+        allow read: if get(/databases/$(database)/documents/courses/$(courseId)).data.status == 'published' || admin() || owner(courseId);
+        allow create, update: if admin() || owner(courseId);
+        allow delete: if admin() || owner(courseId);
+      }
+      match /reviews/{reviewId} {
+        allow read: if admin() || owner(courseId);
+        allow create: if admin() || owner(courseId);
+        allow update, delete: if admin();
+      }
+    }
+
+    match /purchases/{purchaseId} {
+      allow read: if signedIn() && request.auth.uid == resource.data.uid;
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid && request.resource.data.status == 'completed'
+        && request.resource.data.courseId is string
+        && get(/databases/$(database)/documents/courses/$(request.resource.data.courseId)).data.status == 'published';
+      allow update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || admin());
+      allow create: if signedIn() && request.auth.uid == userId;
+      allow update: if signedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if admin();
+      allow update: if signedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /progress/{id} {
+      allow read, write: if signedIn() && request.auth.uid == request.resource.data.uid;
+    }
+    match /payments/{id} { allow read: if signedIn() && request.auth.uid == resource.data.uid; allow write: if false; }
+    match /sessions/{id} { allow read, write: if false; }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
