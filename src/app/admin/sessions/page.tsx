@@ -23,7 +23,7 @@ export default function AdminSessionsReview() {
 
   const { data: adminProfile } = useDoc(userRef);
 
-  const isMasterAdmin = user?.email === "mohamed76y@gmail.com" || user?.email === "mohamjedminijd2006@gmail.com";
+  const isMasterAdmin = user?.email === "mohamed76y@gmail.com" || user?.email === "mohamjedminijd2006@gmail.com" || user?.email === "mohamedmini2006@gamil.com";
   const canReadSessions = adminProfile?.isAdmin || isMasterAdmin;
 
   const sessionsQuery = useMemoFirebase(() => {

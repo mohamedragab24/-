@@ -52,7 +52,7 @@ export default function AdminApprovals() {
 
   const { data: adminProfile } = useDoc(userRef);
 
-  const isMasterAdmin = user?.email === "mohamed76y@gmail.com" || user?.email === "mohamjedminijd2006@gmail.com";
+  const isMasterAdmin = user?.email === "mohamed76y@gmail.com" || user?.email === "mohamjedminijd2006@gmail.com" || user?.email === "mohamedmini2006@gamil.com";
   const canReadApprovals = adminProfile?.isAdmin || isMasterAdmin;
 
   const profilesQuery = useMemoFirebase(() => {

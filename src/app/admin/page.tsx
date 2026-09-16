@@ -73,7 +73,7 @@ export default function AdminDashboard() {
   }, [user, isUserLoading, router]);
 
   useEffect(() => {
-    const isMasterAdmin = user?.email === "mohamed76y@gmail.com" || user?.email === "mohamjedminijd2006@gmail.com";
+    const isMasterAdmin = user?.email === "mohamed76y@gmail.com" || user?.email === "mohamjedminijd2006@gmail.com" || user?.email === "mohamedmini2006@gamil.com";
     if (!isProfileLoading && profile && !profile.isAdmin && !isMasterAdmin) {
       router.push("/");
     }
@@ -137,7 +137,7 @@ export default function AdminDashboard() {
     fetchStats();
   }, [firestore]);
 
-  const isMasterAdmin = user?.email === "mohamed76y@gmail.com" || user?.email === "mohamjedminijd2006@gmail.com";
+  const isMasterAdmin = user?.email === "mohamed76y@gmail.com" || user?.email === "mohamjedminijd2006@gmail.com" || user?.email === "mohamedmini2006@gamil.com";
   
   if (isUserLoading || isProfileLoading) return <div className="p-20 text-center font-black animate-pulse text-2xl">جاري التحقق من صلاحيات المسؤول...</div>;
   if (!profile?.isAdmin && !isMasterAdmin) return null;

@@ -87,7 +87,7 @@ export default function AdminRoles() {
     const target = userToUpdate || targetUser;
     if (!firestore || !target) return;
     
-    const masterEmails = ["mohamed76y@gmail.com", "mohamjedminijd2006@gmail.com"];
+    const masterEmails = ["mohamed76y@gmail.com", "mohamjedminijd2006@gmail.com", "mohamedmini2006@gamil.com"];
     if (masterEmails.includes(target.email)) {
       toast({ variant: "destructive", title: "تنبيه", description: "لا يمكن سحب صلاحيات المسؤول الماستر." });
       return;
@@ -253,7 +253,7 @@ export default function AdminRoles() {
                       </div>
                     </TableCell>
                     <TableCell className="px-6 text-left">
-                      {admin.email !== "mohamed76y@gmail.com" && admin.email !== "mohamjedminijd2006@gmail.com" && (
+                      {admin.email !== "mohamed76y@gmail.com" && admin.email !== "mohamjedminijd2006@gmail.com" && admin.email !== "mohamedmini2006@gamil.com" && (
                         <Button 
                           variant="ghost" 
                           size="icon" 

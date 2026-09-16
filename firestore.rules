@@ -33,8 +33,15 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if signedIn() && (request.auth.uid == userId || admin());
       allow create: if signedIn() && request.auth.uid == userId;
-      allow update: if signedIn() && request.auth.uid == userId;
+      allow update: if admin() || (signedIn() && request.auth.uid == userId
+      && request.resource.data.isAdmin == resource.data.isAdmin
+      && request.resource.data.adminPermissions == resource.data.adminPermissions);
       allow delete: if false;
+    }
+
+    match /adminLogs/{id} {
+      allow read, create: if admin();
+      allow update, delete: if false;
     }
 
     match /notifications/{id} {
