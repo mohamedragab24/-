@@ -22,6 +22,9 @@ export function Header() {
   const router = useRouter();
   const pathname = usePathname();
 
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const settingsRef = useMemoFirebase(() => {
     if (!firestore) return null;
