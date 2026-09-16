@@ -26,13 +26,49 @@ interface ClientWrapperProps {
 
 export function ClientWrapper({ children }: ClientWrapperProps) {
   const [mounted, setMounted] = useState(false);
+  const [currentDir, setCurrentDir] = useState<"rtl" | "ltr">("rtl");
 
   useEffect(() => {
     setMounted(true);
 
-    // المنصة تعمل بالعربية فقط. تم إلغاء تبديل اللغة وترجمة Google من الواجهة.
-    document.documentElement.lang = "ar";
-    document.documentElement.dir = "rtl";
+    // Read current language from Google Translate cookie or localStorage
+    const getIsEnglish = () => {
+      if (typeof document === "undefined") return false;
+      const match = document.cookie.match(/googtrans=\/([^/]+)\/([^;]+)/);
+      if (match && match[2] && (match[2] === "en" || match[2].startsWith("en"))) {
+        return true;
+      }
+      return localStorage.getItem("fahimt_language") === "en";
+    };
+
+    const isEn = getIsEnglish();
+    setCurrentDir(isEn ? "ltr" : "rtl");
+    document.documentElement.lang = isEn ? "en" : "ar";
+    document.documentElement.dir = isEn ? "ltr" : "rtl";
+
+    // Setup Google Translate
+    window.googleTranslateElementInit = () => {
+      if (window.google?.translate?.TranslateElement) {
+        new window.google.translate.TranslateElement(
+          {
+            pageLanguage: "ar",
+            includedLanguages: "ar,en",
+            autoDisplay: false,
+          },
+          "google_translate_element"
+        );
+      }
+    };
+
+    if (!document.getElementById("google-translate-script")) {
+      const script = document.createElement("script");
+      script.id = "google-translate-script";
+      script.src = "//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit";
+      script.async = true;
+      document.body.appendChild(script);
+    } else if (window.google?.translate) {
+      window.googleTranslateElementInit();
+    }
 
     // Auto-recover from stale Webpack chunks or ChunkLoadError after updates
     const handleChunkError = (event: ErrorEvent | PromiseRejectionEvent) => {
@@ -72,7 +108,9 @@ export function ClientWrapper({ children }: ClientWrapperProps) {
     <FirebaseClientProvider>
       <ThemeManager>
         <SidebarProvider defaultOpen={false}>
-          <div className="flex min-h-svh w-full bg-background flex-col relative overflow-x-hidden" dir="rtl">
+          <div className="flex min-h-svh w-full bg-background flex-col relative overflow-x-hidden" dir={currentDir}>
+            {/* عنصر ترجمة جوجل المخفي المطلوب لتشغيل محرك الترجمة */}
+            <div id="google_translate_element" style={{ display: "none" }} />
             <Header />
             <div className="flex flex-1 w-full">
               {/* القائمة الجانبية تم استرجاعها هنا */}

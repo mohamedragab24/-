@@ -253,7 +253,7 @@ export default function AdminRoles() {
                       </div>
                     </TableCell>
                     <TableCell className="px-6 text-left">
-                      {admin.email !== "mohamed76y@gmail.com" && admin.email !== "mohamjedminijd2006@gmail.com" && admin.email !== "mohamedmini2006@gamil.com" && (
+                      {admin.email !== "mohamed76y@gmail.com" && admin.email !== "mohamjedminijd2006@gmail.com" && (
                         <Button 
                           variant="ghost" 
                           size="icon" 
