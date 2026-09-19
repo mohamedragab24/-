@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Search, Mail, Phone, Fingerprint, ShieldCheck, Loader2, Key, UserCheck, UserX, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getApp } from "firebase/app";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { Badge } from "@/components/ui/badge";
 
 /**
@@ -24,6 +26,10 @@ export default function AdminAccountManagement() {
   const [isSearching, setIsSearching] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [targetUser, setTargetUser] = useState<any>(null);
+  const [adminName, setAdminName] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [creatingAdmin, setCreatingAdmin] = useState(false);
 
   const handleSearch = async () => {
     if (!firestore || !searchQuery.trim()) {
@@ -138,6 +144,16 @@ export default function AdminAccountManagement() {
             >
               {isSearching ? <Loader2 className="animate-spin h-6 w-6" /> : <Search className="h-6 w-6" />}
             </Button>
+          </div>
+
+          <div className="p-8 bg-zinc-50 rounded-[2.5rem] border-2 border-dashed space-y-5">
+            <h3 className="text-2xl font-black flex items-center gap-2 justify-end"><ShieldCheck className="text-primary"/> إنشاء حساب أدمن</h3>
+            <div className="grid md:grid-cols-3 gap-4">
+              <Input placeholder="الاسم" value={adminName} onChange={e=>setAdminName(e.target.value)} />
+              <Input placeholder="البريد الإلكتروني" type="email" value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} />
+              <Input placeholder="كلمة المرور (8+ أحرف)" type="password" value={adminPassword} onChange={e=>setAdminPassword(e.target.value)} />
+            </div>
+            <Button disabled={creatingAdmin} className="w-full h-14 rounded-2xl font-black" onClick={async()=>{if(!adminEmail||adminPassword.length<8)return;setCreatingAdmin(true);try{await httpsCallable(getFunctions(getApp(),'us-central1'),'createAdminAccount')({email:adminEmail,password:adminPassword,name:adminName});toast({title:'تم إنشاء حساب الأدمن'});setAdminName('');setAdminEmail('');setAdminPassword('');}catch(e:any){toast({variant:'destructive',title:'تعذر إنشاء الأدمن',description:e?.message||'خطأ'});}finally{setCreatingAdmin(false);}}}>{creatingAdmin?<Loader2 className="animate-spin"/>:<Key/>} إنشاء حساب أدمن</Button>
           </div>
 
           {targetUser && (

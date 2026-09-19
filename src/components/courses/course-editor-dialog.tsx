@@ -41,9 +41,13 @@ import {
 } from "lucide-react";
 import { Course, CourseLesson } from "@/lib/types";
 import { upsertCourse } from "@/lib/courses-data";
+import { saveCourseWithLessons } from "@/lib/course-service";
+import { getApp } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { 
   compressImageToDataUrl, 
+  uploadToR2,
   processVideoFile, 
   extractVideoDuration, 
   formatBytes,
@@ -77,6 +81,8 @@ export function CourseEditorDialog({
   const [title, setTitle] = useState(courseToEdit?.title || "");
   const [description, setDescription] = useState(courseToEdit?.description || "");
   const [coverUrl, setCoverUrl] = useState(courseToEdit?.coverUrl || "");
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState(courseToEdit?.coverUrl || "");
+  const [draftCourseId, setDraftCourseId] = useState(courseToEdit?.id || "");
   const [coverFileName, setCoverFileName] = useState("");
   const [isProcessingCover, setIsProcessingCover] = useState(false);
   const [isCoverDragging, setIsCoverDragging] = useState(false);
@@ -109,15 +115,22 @@ export function CourseEditorDialog({
       setTitle(courseToEdit.title);
       setDescription(courseToEdit.description);
       setCoverUrl(courseToEdit.coverUrl);
+      setCoverPreviewUrl(courseToEdit.coverUrl);
+      setDraftCourseId(courseToEdit.id);
+      if (courseToEdit.coverUrl?.startsWith("r2cover:")) {
+        resolveMediaUrl(courseToEdit.coverUrl).then((u) => u && setCoverPreviewUrl(u));
+      }
       setCoverFileName("");
       setPrice(courseToEdit.price);
       setCategory(courseToEdit.category || "البرمجة والتقنية");
       setIsPublished(courseToEdit.isPublished);
-      setLessons(courseToEdit.lessons || []);
+      setLessons((courseToEdit.lessons || []).map((lesson, index) => ({ ...lesson, order: index + 1, title: withLessonNumber(lesson.title, index + 1) })));
     } else {
       setTitle("");
       setDescription("");
       setCoverUrl("");
+      setCoverPreviewUrl("");
+      setDraftCourseId(`course-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
       setCoverFileName("");
       setPrice(100);
       setCategory("البرمجة والتقنية");
@@ -142,15 +155,17 @@ export function CourseEditorDialog({
     }
     setIsProcessingCover(true);
     try {
-      const dataUrl = await compressImageToDataUrl(file);
-      setCoverUrl(dataUrl);
+      const uploaded = await uploadToR2(file, draftCourseId, "cover");
+      setCoverUrl(uploaded.token);
+      setCoverPreviewUrl(uploaded.previewUrl);
       setCoverFileName(`${file.name} (${formatBytes(file.size)})`);
-      toast({ 
-        title: "تم رفع صورة الغلاف", 
-        description: `تم تجهيز ${file.name} بنجاح كغلاف للكورس.` 
+      toast({
+        title: "تم رفع صورة الغلاف إلى Cloudflare R2",
+        description: `تم حفظ ${file.name} في مساحة تخزين الكورس.`
       });
-    } catch {
-      toast({ title: "خطأ", description: "تعذر معالجة الصورة، يرجى تجربة صورة أخرى.", variant: "destructive" });
+    } catch (err) {
+      console.error(err);
+      toast({ title: "خطأ في رفع الصورة", description: "تعذر رفع الصورة إلى Cloudflare R2.", variant: "destructive" });
     } finally {
       setIsProcessingCover(false);
     }
@@ -173,7 +188,7 @@ export function CourseEditorDialog({
     try {
       const sizeStr = formatBytes(file.size);
       const durationMin = await extractVideoDuration(file);
-      const { token, previewUrl } = await processVideoFile(file);
+      const { token, previewUrl } = await processVideoFile(file, draftCourseId, lessons.length + 1);
 
       setSelectedVideoToken(token);
       setSelectedVideoPreview(previewUrl);
@@ -207,6 +222,13 @@ export function CourseEditorDialog({
     }
   };
 
+  // يحافظ على رقم الدرس تلقائيًا ويمنع تكرار الأرقام عند إعادة الترتيب.
+  const cleanLessonTitle = (value: string) =>
+    value.trim().replace(/^\s*\d+\s*[.\-]\s*/u, "");
+
+  const withLessonNumber = (value: string, order: number) =>
+    `${order}. ${cleanLessonTitle(value)}`;
+
   const handleAddLesson = () => {
     if (!newLessonTitle.trim()) {
       toast({ title: "تنبيه", description: "يرجى كتابة عنوان الدرس أولاً.", variant: "destructive" });
@@ -219,7 +241,7 @@ export function CourseEditorDialog({
 
     const newLesson: CourseLesson = {
       id: `les-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-      title: newLessonTitle.trim(),
+      title: withLessonNumber(newLessonTitle, lessons.length + 1),
       videoUrl: selectedVideoToken,
       durationMinutes: Number(newLessonDuration) || 10,
       order: lessons.length + 1,
@@ -249,7 +271,7 @@ export function CourseEditorDialog({
   };
 
   const handleRemoveLesson = (id: string) => {
-    const updated = lessons.filter(l => l.id !== id).map((l, index) => ({ ...l, order: index + 1 }));
+    const updated = lessons.filter(l => l.id !== id).map((l, index) => ({ ...l, order: index + 1, title: withLessonNumber(l.title, index + 1) }));
     setLessons(updated);
   };
 
@@ -263,7 +285,7 @@ export function CourseEditorDialog({
     updated[targetIndex] = temp;
 
     // re-assign order numbers
-    const reordered = updated.map((l, i) => ({ ...l, order: i + 1 }));
+    const reordered = updated.map((l, i) => ({ ...l, order: i + 1, title: withLessonNumber(l.title, i + 1) }));
     setLessons(reordered);
   };
 
@@ -274,7 +296,7 @@ export function CourseEditorDialog({
     setPreviewResolvedUrl(resolved);
   };
 
-  const handleSaveCourse = () => {
+  const handleSaveCourse = async () => {
     if (!title.trim()) {
       toast({ title: "خطأ", description: "يرجى إدخال اسم الكورس.", variant: "destructive" });
       return;
@@ -288,14 +310,20 @@ export function CourseEditorDialog({
       return;
     }
 
+    const normalizedLessons = lessons.map((lesson, index) => ({
+      ...lesson,
+      order: index + 1,
+      title: withLessonNumber(lesson.title, index + 1),
+    }));
+
     const courseData: Course = {
-      id: courseToEdit?.id || `course-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: draftCourseId || courseToEdit?.id || `course-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       title: title.trim(),
       description: description.trim(),
       coverUrl: coverUrl,
       price: Number(price) || 0,
       features: [],
-      lessons: lessons,
+      lessons: normalizedLessons,
       instructorId: instructorId || "current-instructor",
       instructorName: instructorName || "المُفهم المتخصص",
       instructorAvatar: instructorAvatar || "",
@@ -306,11 +334,24 @@ export function CourseEditorDialog({
       rating: courseToEdit?.rating || 5.0
     };
 
-    upsertCourse(courseData);
-    toast({
-      title: "تم الحفظ بنجاح",
-      description: isPublished ? "تم نشر الكورس وأصبح متاحاً للطلاب مع الفيديوهات المرفوعة." : "تم حفظ الكورس كمسودة مخفية."
-    });
+    try {
+      const db = getFirestore(getApp());
+      await saveCourseWithLessons(db, courseData, normalizedLessons, courseToEdit?.lessons?.map(l => l.id) || []);
+      // Keep local cache only for backward compatibility with the old UI.
+      upsertCourse(courseData);
+      toast({
+        title: "تم الحفظ بنجاح",
+        description: "تم حفظ بيانات الكورس والدروس على Firebase، والملفات على Cloudflare R2."
+      });
+    } catch (error) {
+      console.error(error);
+      toast({
+        title: "تعذر حفظ الكورس",
+        description: "تأكد من تسجيل الدخول وصلاحيات Firebase ثم حاول مرة أخرى.",
+        variant: "destructive"
+      });
+      return;
+    }
     onOpenChange(false);
     if (onSaved) onSaved();
   };
@@ -411,7 +452,7 @@ export function CourseEditorDialog({
 
               {coverUrl ? (
                 <div className="relative aspect-video w-full max-h-56 rounded-2xl overflow-hidden border-2 border-zinc-200 group bg-zinc-900">
-                  <img src={coverUrl} alt="غلاف الكورس" className="w-full h-full object-cover" />
+                  <img src={coverPreviewUrl || coverUrl} alt="غلاف الكورس" className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
                     <Button
                       type="button"
@@ -427,6 +468,7 @@ export function CourseEditorDialog({
                       variant="destructive"
                       onClick={() => {
                         setCoverUrl("");
+                        setCoverPreviewUrl("");
                         setCoverFileName("");
                       }}
                       className="rounded-xl text-xs font-bold gap-1"

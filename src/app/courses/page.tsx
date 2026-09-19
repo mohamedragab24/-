@@ -45,7 +45,9 @@ import {
   upsertCourse,
   isUserEnrolled 
 } from "@/lib/courses-data";
+import { listAllCourses, listPublishedCourses } from "@/lib/course-service";
 import { CourseEditorDialog } from "@/components/courses/course-editor-dialog";
+import { R2MediaImage } from "@/components/r2-media-image";
 import { CourseSalesDialog } from "@/components/courses/course-sales-dialog";
 import { CoursePurchaseDialog } from "@/components/courses/course-purchase-dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -92,23 +94,30 @@ export default function CoursesPage() {
   const [courseToPurchase, setCourseToPurchase] = useState<Course | null>(null);
   const [courseToDelete, setCourseToDelete] = useState<Course | null>(null);
 
-  const refreshData = () => {
-    setCourses(getStoredCourses());
+  const refreshData = async () => {
+    try {
+      const remoteCourses = isMufhem
+        ? await listAllCourses(firestore)
+        : await listPublishedCourses(firestore);
+      setCourses(remoteCourses);
+    } catch (error) {
+      console.error("Failed to load courses from Firebase", error);
+      setCourses(getStoredCourses());
+    }
     setEnrollments(getStoredEnrollments());
   };
 
   useEffect(() => {
-    refreshData();
-
-    const handleUpdate = () => refreshData();
+    if (!firestore) return;
+    void refreshData();
+    const handleUpdate = () => { void refreshData(); };
     window.addEventListener("fahimt_courses_updated", handleUpdate);
     window.addEventListener("fahimt_enrollments_updated", handleUpdate);
-
     return () => {
       window.removeEventListener("fahimt_courses_updated", handleUpdate);
       window.removeEventListener("fahimt_enrollments_updated", handleUpdate);
     };
-  }, []);
+  }, [firestore, isMufhem]);
 
   // Update default tab when role changes
   useEffect(() => {
@@ -119,8 +128,21 @@ export default function CoursesPage() {
     }
   }, [isMufhem]);
 
-  const handleTogglePublish = (course: Course) => {
+  const handleTogglePublish = async (course: Course) => {
     const updated = { ...course, isPublished: !course.isPublished };
+    try {
+      await import("firebase/firestore").then(({ updateDoc, doc, serverTimestamp }) =>
+        updateDoc(doc(firestore, "courses", course.id), {
+          isPublished: updated.isPublished,
+          status: updated.isPublished ? "published" : "pending",
+          updatedAt: serverTimestamp()
+        })
+      );
+    } catch (error) {
+      console.error(error);
+      toast({ title: "تعذر تحديث النشر", description: "تعذر تحديث الكورس على Firebase.", variant: "destructive" });
+      return;
+    }
     upsertCourse(updated);
     toast({
       title: updated.isPublished ? "تم نشر الكورس" : "تم إخفاء الكورس",
@@ -331,7 +353,7 @@ export default function CoursesPage() {
                       <div>
                         {/* غلاف الكورس */}
                         <div className="relative aspect-video overflow-hidden bg-zinc-100">
-                          <img
+                          <R2MediaImage
                             src={course.coverUrl}
                             alt={course.title}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
@@ -436,7 +458,7 @@ export default function CoursesPage() {
                   <Card key={course.id} className="rounded-[2.5rem] border-2 bg-white overflow-hidden shadow-sm flex flex-col justify-between">
                     <div>
                       <div className="relative aspect-video overflow-hidden">
-                        <img src={course.coverUrl} alt={course.title} className="w-full h-full object-cover" />
+                        <R2MediaImage src={course.coverUrl} alt={course.title} className="w-full h-full object-cover" />
                         <Badge className="absolute top-4 right-4 bg-emerald-600 text-white font-bold">مشترك ومفعّل</Badge>
                       </div>
                       <CardContent className="p-6 md:p-8 space-y-3 text-right">
@@ -531,7 +553,7 @@ export default function CoursesPage() {
                     className="p-6 bg-white dark:bg-zinc-900 border rounded-[2rem] shadow-sm hover:border-primary/30 transition-all flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 text-right"
                   >
                     <div className="flex items-center gap-5 w-full lg:w-auto">
-                      <img
+                      <R2MediaImage
                         src={course.coverUrl}
                         alt={course.title}
                         className="w-24 h-24 md:w-32 md:h-24 rounded-2xl object-cover border shrink-0 bg-zinc-100"

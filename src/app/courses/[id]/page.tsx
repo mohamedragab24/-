@@ -51,7 +51,25 @@ export default function CourseDetailPage() {
   const userRef = useMemoFirebase(() => (firestore && user) ? doc(firestore, "users", user.uid) : null, [firestore, user]);
   const { data: profile } = useDoc(userRef);
 
-  const courseId = params?.id as string;
+  const rawCourseRoute = params?.id as string;
+  // روابط الدروس: /courses/course1-COURSE_ID ، /courses/course2-COURSE_ID ...
+  const lessonRouteMatch = rawCourseRoute?.match(/^course(\d+)-(.+)$/i);
+  const routeLessonNumber = lessonRouteMatch ? Number(lessonRouteMatch[1]) : 1;
+  const courseId = lessonRouteMatch ? `course-${lessonRouteMatch[2]}` : rawCourseRoute;
+
+  // الدرس الأول يبقى على المنصة، والدرس 2 وما بعده يفتح تطبيق فهمت تلقائيًا.
+  useEffect(() => {
+    if (typeof window === "undefined" || !lessonRouteMatch || routeLessonNumber < 2) return;
+    const appLink = `fahmny://${rawCourseRoute}`;
+    const fallbackTimer = window.setTimeout(() => {
+      // إذا لم يكن التطبيق مثبتًا، نبقي المستخدم على صفحة الويب بدل كسر الصفحة.
+      if (document.visibilityState === "visible") {
+        console.info("تطبيق فهمت غير مفتوح؛ يمكنك فتح التطبيق من زر المحاضرة/الكورس.");
+      }
+    }, 1800);
+    window.location.href = appLink;
+    return () => window.clearTimeout(fallbackTimer);
+  }, [rawCourseRoute, routeLessonNumber, Boolean(lessonRouteMatch)]);
   const [course, setCourse] = useState<Course | null>(null);
   const [selectedLessonIndex, setSelectedLessonIndex] = useState(0);
   const [isEnrolled, setIsEnrolled] = useState(false);
@@ -129,6 +147,12 @@ export default function CourseDetailPage() {
     };
   }, [courseId]);
 
+  useEffect(() => {
+    if (!course || routeLessonNumber < 1) return;
+    const targetIndex = Math.min(routeLessonNumber - 1, Math.max(course.lessons.length - 1, 0));
+    setSelectedLessonIndex(targetIndex);
+  }, [course, routeLessonNumber]);
+
   if (!course) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center space-y-4 font-body" dir="rtl">
@@ -177,12 +201,22 @@ export default function CourseDetailPage() {
   };
 
   const handleSelectLesson = (index: number) => {
+    const lesson = course.lessons[index];
+    if (!lesson) return;
+
+    // الدرس الأول يبقى داخل المنصة. من الدرس 2 وما بعده يتحول إلى رابط التطبيق.
+    if (index >= 1) {
+      const numericCourseId = course.id.replace(/^course-/i, "");
+      window.location.href = `/courses/course${index + 1}-${numericCourseId}`;
+      return;
+    }
+
     const locked = isLessonLocked(index);
     if (locked) {
       toast({
         variant: "destructive",
         title: "🔒 هذا الدرس مغلق بقفل",
-        description: `الدرس "${course.lessons[index]?.title}" مغلق ولا يمكن فتحه إلا بعد شراء الكورس الكامل.`
+        description: `الدرس "${lesson.title}" مغلق ولا يمكن فتحه إلا بعد شراء الكورس الكامل.`
       });
       setPurchaseOpen(true);
     }

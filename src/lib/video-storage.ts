@@ -1,4 +1,8 @@
-// IndexedDB and Local Media Storage for Course Videos and Images
+import { getApp } from "firebase/app";
+import { getFunctions, httpsCallable } from "firebase/functions";
+
+// R2-backed course media storage. IndexedDB is retained only for local previews.
+
 // Allows uploading actual high-definition video files and images without external links.
 
 const DB_NAME = "FahimtCourseMediaDB";
@@ -81,6 +85,19 @@ const activeBlobUrls = new Map<string, string>();
 export async function resolveMediaUrl(url: string): Promise<string> {
   if (!url) return "";
 
+  if (url.startsWith("r2:") || url.startsWith("r2cover:")) {
+    try {
+      const functions = getFunctions(getApp(), "us-central1");
+      const callable = httpsCallable(functions, "getR2MediaUrl");
+      const result = await callable({ token: url });
+      const data = result.data as { url?: string };
+      return data.url || "";
+    } catch (err) {
+      console.warn("Could not resolve R2 media URL:", err);
+      return "";
+    }
+  }
+
   if (url.startsWith("indexeddb:video:")) {
     const key = url.replace("indexeddb:video:", "");
     if (activeBlobUrls.has(key)) return activeBlobUrls.get(key)!;
@@ -104,6 +121,34 @@ export async function resolveMediaUrl(url: string): Promise<string> {
   }
 
   return url;
+}
+
+
+export async function uploadToR2(
+  file: File,
+  courseId: string,
+  kind: "cover" | "lesson",
+  lessonNumber?: number
+): Promise<{ token: string; key: string; previewUrl: string }> {
+  const functions = getFunctions(getApp(), "us-central1");
+  const callable = httpsCallable(functions, "createR2UploadUrl");
+  const result = await callable({
+    courseId,
+    kind,
+    lessonNumber: lessonNumber || 0,
+    fileName: file.name,
+    contentType: file.type || "application/octet-stream",
+  });
+  const data = result.data as { uploadUrl?: string; url?: string; token: string; key: string };
+  const uploadUrl = data.uploadUrl || data.url;
+  if (!uploadUrl) throw new Error("R2 upload URL was not returned");
+  const response = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!response.ok) throw new Error(`R2 upload failed: ${response.status}`);
+  return { token: data.token, key: data.key, previewUrl: URL.createObjectURL(file) };
 }
 
 /**
@@ -223,22 +268,15 @@ export function compressImageToDataUrl(
 /**
  * Saves a video file into IndexedDB and returns a resolution token
  */
-export async function processVideoFile(file: File): Promise<{ token: string; previewUrl: string }> {
+export async function processVideoFile(
+  file: File,
+  courseId?: string,
+  lessonNumber?: number
+): Promise<{ token: string; previewUrl: string }> {
   const previewUrl = URL.createObjectURL(file);
-  const videoId = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-  try {
-    await storeMediaBlob(STORE_VIDEOS, videoId, file);
-    activeBlobUrls.set(videoId, previewUrl);
-    return {
-      token: `indexeddb:video:${videoId}`,
-      previewUrl
-    };
-  } catch (err) {
-    console.warn("Falling back to in-memory blob for video:", err);
-    return {
-      token: previewUrl,
-      previewUrl
-    };
+  if (!courseId) {
+    return { token: previewUrl, previewUrl };
   }
+  const uploaded = await uploadToR2(file, courseId, "lesson", lessonNumber);
+  return { token: uploaded.token, previewUrl: uploaded.previewUrl };
 }

@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useUser, useFirestore, useDoc, useMemoFirebase, useFirebase } from "@/firebase";
 import { doc } from "firebase/firestore";
+import { getApp } from "firebase/app";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { 
   Video, 
   Star, 
@@ -77,29 +79,28 @@ export default function MeetingPage() {
 
   useEffect(() => {
     if (meetingStarted && window.JitsiMeetExternalAPI && jitsiContainerRef.current && profile && request) {
-      const options = {
-        roomName: `vpaas-magic-cookie-1fbd16d85bf84be0aaba7317c17f25dd/Fahimni_${requestId}`,
-        width: "100%",
-        height: "100%",
-        parentNode: jitsiContainerRef.current,
-        userInfo: { displayName: profile.fullName, email: profile.email },
-        configOverwrite: { 
-          prejoinPageEnabled: false,
-          disableInviteFunctions: true
-        },
-        interfaceConfigOverwrite: {
-          TOOLBAR_BUTTONS: [
-            'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
-            'fittowindow', 'chat', 'raisehand', 'videoquality', 'filmstrip',
-            'shortcuts', 'tileview', 'videobackgroundblur', 'help', 'mute-everyone'
-          ],
+      (async () => {
+        try {
+          const functions = getFunctions(getApp(), 'us-central1');
+          const callable = httpsCallable(functions, 'getJaasMeetingToken');
+          const tokenResult: any = await callable({ requestId, room: `Fahimni_${requestId}` });
+          const token = tokenResult.data?.token;
+          const room = tokenResult.data?.room || `vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034/Fahimni_${requestId}`;
+          if (!token) throw new Error('تعذر الحصول على تصريح المحاضرة');
+          const isTeacher = request.mufhemId === user?.uid || profile.role === 'mufhem' || profile.role === 'teacher';
+          const options = {
+            roomName: room, token, width: "100%", height: "100%", parentNode: jitsiContainerRef.current,
+            userInfo: { displayName: profile.fullName || profile.name, email: profile.email },
+            configOverwrite: { prejoinPageEnabled: false, disableInviteFunctions: true },
+            interfaceConfigOverwrite: { TOOLBAR_BUTTONS: ['microphone','camera','chat','raisehand','videoquality','filmstrip','tileview','fullscreen', ...(isTeacher ? ['recording'] : [])] }
+          };
+          const newApi = new window.JitsiMeetExternalAPI("8x8.vc", options);
+          setApi(newApi);
+          newApi.addEventListener('videoConferenceLeft', () => setShowRatingDialog(true));
+        } catch (e: any) {
+          toast({ variant: 'destructive', title: 'تعذر فتح المحاضرة', description: e?.message || 'حاول مرة أخرى' });
         }
-      };
-      const newApi = new window.JitsiMeetExternalAPI("8x8.vc", options);
-      setApi(newApi);
-      newApi.addEventListener('videoConferenceLeft', () => {
-        setShowRatingDialog(true);
-      });
+      })();
     }
   }, [meetingStarted, profile, request, requestId]);
 
@@ -143,7 +144,7 @@ export default function MeetingPage() {
 
   return (
     <div className="flex flex-col h-screen bg-black overflow-hidden" dir="rtl">
-      <Script src="https://8x8.vc/vpaas-magic-cookie-1fbd16d85bf84be0aaba7317c17f25dd/external_api.js" />
+      <Script src="https://8x8.vc/vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034/external_api.js" />
       
       {!meetingStarted ? (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-8 bg-[#F8FAFC]">
@@ -164,12 +165,17 @@ export default function MeetingPage() {
               <p className="text-primary font-black text-xl">{request?.title}</p>
             </div>
 
-            <Button 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full">
+              <Button variant="outline" asChild className="h-16 rounded-2xl font-black border-2">
+                <a href={`fahmny://meeting/${requestId}`}>فتح المحاضرة في التطبيق</a>
+              </Button>
+              <Button 
               onClick={handleStartMeeting} 
               className="w-full h-20 rounded-[2rem] font-black text-2xl bg-primary shadow-xl hover:scale-[1.02] transition-all"
             >
-              <Play className="ml-3 h-8 w-8 fill-current" /> ابدأ المحاضرة الآن
+              <Play className="ml-3 h-8 w-8 fill-current" /> ابدأ المحاضرة من الويب
             </Button>
+            </div>
             
             <p className="text-xs text-zinc-400 font-bold italic">نتمنى لك رحلة تعليمية مثمرة وممتعة.</p>
           </Card>

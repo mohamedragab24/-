@@ -29,6 +29,13 @@ export async function listPublishedCourses(db: Firestore) {
   return snap.docs.map(d => mapCourse(d.id, d.data()));
 }
 
+export async function listAllCourses(db: Firestore) {
+  const snap = await getDocs(collection(db, 'courses'));
+  const out: Course[] = [];
+  for (const d of snap.docs) out.push(await getCourseFromFirestore(db, d.id) as Course);
+  return out.filter(Boolean);
+}
+
 export async function listInstructorCourses(db: Firestore, instructorId: string) {
   const snap = await getDocs(query(collection(db, 'courses'), where('instructorId', '==', instructorId)));
   const out: Course[] = [];
@@ -57,11 +64,14 @@ export async function saveCourseWithLessons(db: Firestore, course: Course, lesso
   existingLessonIds.filter(id => !keep.has(id)).forEach(id => batch.delete(doc(db, 'courses', course.id, 'lessons', id)));
   lessons.forEach((lesson, index) => {
     const ref = doc(db, 'courses', course.id, 'lessons', lesson.id);
+    const videoToken = String(lesson.videoUrl || '');
+    const r2Key = videoToken.startsWith('r2:') ? videoToken.split(':').slice(3).join(':') : '';
     batch.set(ref, {
       title: lesson.title,
       description: lesson.description || '',
       storagePath: lesson.storagePath || '',
-      videoUrl: lesson.videoUrl || '',
+      r2Key,
+      videoUrl: videoToken,
       videoFileName: lesson.videoFileName || '',
       videoFileSize: lesson.videoFileSize || '',
       durationMinutes: lesson.durationMinutes,
