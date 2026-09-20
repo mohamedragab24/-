@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { GraduationCap, Layout, Search, Menu, User, Zap, MessageSquare, Bell, ShieldCheck, Layers, Globe } from "lucide-react";
+import { GraduationCap, Layout, Search, Menu, User, Zap, MessageSquare, Bell, ShieldCheck, Layers } from "lucide-react";
 import { useFirestore, useDoc, useMemoFirebase, useFirebase, useUser, useCollection } from "@/firebase";
 import { doc, collection, query, where } from "firebase/firestore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -21,84 +21,9 @@ export function Header() {
   const { firestore } = useFirebase();
   const router = useRouter();
   const pathname = usePathname();
-  const [currentLang, setCurrentLang] = useState<"ar" | "en">("ar");
-  const [isTranslating, setIsTranslating] = useState(false);
-
   useEffect(() => {
     setMounted(true);
-    if (typeof window !== "undefined") {
-      // Check Google Translate cookie first
-      const match = document.cookie.match(/googtrans=\/([^/]+)\/([^;]+)/);
-      if (match && match[2] && (match[2] === "en" || match[2].startsWith("en"))) {
-        setCurrentLang("en");
-        document.documentElement.lang = "en";
-        document.documentElement.dir = "ltr";
-        return;
-      }
-      const saved = localStorage.getItem("fahimt_language") as "ar" | "en" | null;
-      if (saved === "en") {
-        setCurrentLang("en");
-        document.documentElement.lang = "en";
-        document.documentElement.dir = "ltr";
-      } else {
-        setCurrentLang("ar");
-        document.documentElement.lang = "ar";
-        document.documentElement.dir = "rtl";
-      }
-    }
   }, []);
-
-  const handleToggleLanguage = () => {
-    const next = currentLang === "ar" ? "en" : "ar";
-    setCurrentLang(next);
-    setIsTranslating(true);
-
-    if (typeof window !== "undefined") {
-      const host = window.location.hostname;
-
-      if (next === "en") {
-        // Set Google Translate cookie to translate from Arabic to English
-        const val = "/ar/en";
-        document.cookie = `googtrans=${val}; path=/;`;
-        document.cookie = `googtrans=${val}; path=/; domain=${host};`;
-        document.cookie = `googtrans=${val}; path=/; domain=.${host};`;
-        localStorage.setItem("fahimt_language", "en");
-        document.documentElement.lang = "en";
-        document.documentElement.dir = "ltr";
-
-        // Dispatch to google translate combo if available
-        const select = document.querySelector(".goog-te-combo") as HTMLSelectElement | null;
-        if (select) {
-          select.value = "en";
-          select.dispatchEvent(new Event("change"));
-        }
-
-        setTimeout(() => {
-          window.location.reload();
-        }, 100);
-      } else {
-        // Revert back to original Arabic
-        document.cookie = "googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-        document.cookie = `googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=${host};`;
-        document.cookie = `googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${host};`;
-        document.cookie = "googtrans=/ar/ar; path=/;";
-        document.cookie = `googtrans=/ar/ar; path=/; domain=${host};`;
-        localStorage.setItem("fahimt_language", "ar");
-        document.documentElement.lang = "ar";
-        document.documentElement.dir = "rtl";
-
-        const select = document.querySelector(".goog-te-combo") as HTMLSelectElement | null;
-        if (select) {
-          select.value = "ar";
-          select.dispatchEvent(new Event("change"));
-        }
-
-        setTimeout(() => {
-          window.location.reload();
-        }, 100);
-      }
-    }
-  };
 
   const settingsRef = useMemoFirebase(() => {
     if (!firestore) return null;
@@ -201,36 +126,6 @@ export function Header() {
               )}
 
               <div className="flex items-center gap-2 mr-2">
-                {/* زر تبديل اللغة بجانب صورة الملف الشخصي */}
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleToggleLanguage}
-                  disabled={isTranslating}
-                  className={cn(
-                    "h-10 md:h-12 px-3 md:px-3.5 rounded-2xl border-2 transition-all shadow-sm flex items-center gap-2 font-black text-xs cursor-pointer",
-                    currentLang === "en"
-                      ? "border-blue-500 bg-blue-50/90 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 shadow-blue-500/10"
-                      : "border-primary/20 hover:border-primary/50 hover:bg-primary/5 text-zinc-700 dark:text-zinc-200"
-                  )}
-                  title={currentLang === "ar" ? "اضغط للتحويل التلقائي للإنجليزية (Google Translate)" : "اضغط للرجوع للغة العربية"}
-                >
-                  <Globe className={cn("h-4 w-4 shrink-0", currentLang === "en" ? "text-blue-600" : "text-primary")} />
-                  <span className="font-bold flex items-center gap-1.5 whitespace-nowrap">
-                    {currentLang === "ar" ? (
-                      <>
-                        <span>English</span>
-                        <span className="text-xs">🇺🇸</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>العربية</span>
-                        <span className="text-xs">🇪🇬</span>
-                      </>
-                    )}
-                  </span>
-                </Button>
-
                 {user ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
