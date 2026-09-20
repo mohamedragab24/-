@@ -43,6 +43,7 @@ import { Course, CourseLesson } from "@/lib/types";
 import { upsertCourse } from "@/lib/courses-data";
 import { saveCourseWithLessons } from "@/lib/course-service";
 import { getApp } from "firebase/app";
+import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { 
@@ -227,7 +228,7 @@ export function CourseEditorDialog({
     value.trim().replace(/^\s*\d+\s*[.\-]\s*/u, "");
 
   const withLessonNumber = (value: string, order: number) =>
-    `${order}. ${cleanLessonTitle(value)}`;
+    `${order}- ${cleanLessonTitle(value)}`;
 
   const handleAddLesson = () => {
     if (!newLessonTitle.trim()) {
@@ -324,10 +325,11 @@ export function CourseEditorDialog({
       price: Number(price) || 0,
       features: [],
       lessons: normalizedLessons,
-      instructorId: instructorId || "current-instructor",
+      instructorId: getAuth(getApp()).currentUser?.uid || instructorId || "",
       instructorName: instructorName || "المُفهم المتخصص",
       instructorAvatar: instructorAvatar || "",
-      isPublished,
+      isPublished: courseToEdit ? isPublished : false,
+      status: courseToEdit ? (isPublished ? "published" : "pending") : "pending",
       category,
       createdAt: courseToEdit?.createdAt || new Date().toISOString(),
       totalEnrollments: courseToEdit?.totalEnrollments || 0,
@@ -335,19 +337,29 @@ export function CourseEditorDialog({
     };
 
     try {
+      const auth = getAuth(getApp());
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        throw new Error("AUTH_REQUIRED: يجب تسجيل الدخول قبل حفظ الكورس");
+      }
       const db = getFirestore(getApp());
-      await saveCourseWithLessons(db, courseData, normalizedLessons, courseToEdit?.lessons?.map(l => l.id) || []);
+      await saveCourseWithLessons(db, { ...courseData, instructorId: currentUser.uid }, normalizedLessons, courseToEdit?.lessons?.map(l => l.id) || []);
       // Keep local cache only for backward compatibility with the old UI.
       upsertCourse(courseData);
       toast({
         title: "تم الحفظ بنجاح",
         description: "تم حفظ بيانات الكورس والدروس على Firebase، والملفات على Cloudflare R2."
       });
-    } catch (error) {
-      console.error(error);
+    } catch (error: any) {
+      console.error("[CourseEditor] save failed", error);
+      const code = String(error?.code || "");
+      const message = String(error?.message || "");
+      const description = code === "permission-denied" || message.includes("permission")
+        ? "Firebase رفض الحفظ بسبب الصلاحيات. تأكد أن الحساب مسجل دخول وأنه مُفهم."
+        : message || "حدث خطأ غير معروف أثناء حفظ الكورس.";
       toast({
         title: "تعذر حفظ الكورس",
-        description: "تأكد من تسجيل الدخول وصلاحيات Firebase ثم حاول مرة أخرى.",
+        description,
         variant: "destructive"
       });
       return;
@@ -649,7 +661,7 @@ export function CourseEditorDialog({
                   <div className="md:col-span-2 space-y-1">
                     <Label className="text-xs font-bold text-zinc-700">عنوان الدرس:</Label>
                     <Input
-                      value={newLessonTitle ? `${lessons.length + 1}. ${cleanLessonTitle(newLessonTitle)}` : `${lessons.length + 1}. `}
+                      value={newLessonTitle ? `${lessons.length + 1}- ${cleanLessonTitle(newLessonTitle)}` : `${lessons.length + 1}- `}
                       onChange={(e) => {
                         const value = e.target.value.replace(/^\s*\d+\s*[.\-]\s*/u, "");
                         setNewLessonTitle(value);

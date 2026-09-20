@@ -2,6 +2,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, PUT, DELETE, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, ETag",
 };
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
@@ -11,6 +12,16 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 
 function safeRequestId(value) {
   return String(value || "unknown-room").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180) || "unknown-room";
+}
+
+function parseRange(value) {
+  const match = /^bytes=(\d+)-(\d*)$/i.exec(String(value || ""));
+  if (!match) return undefined;
+  const offset = Number(match[1]);
+  if (!Number.isFinite(offset) || offset < 0) return undefined;
+  const end = match[2] ? Number(match[2]) : undefined;
+  if (end !== undefined && (!Number.isFinite(end) || end < offset)) return undefined;
+  return end === undefined ? { offset } : { offset, length: end - offset + 1 };
 }
 
 export default {
@@ -76,13 +87,27 @@ export default {
       return json({ success: true, key });
     }
 
-    // Read course media / recordings.
+    // Read course media / recordings. Supports HTTP Range requests so browsers
+    // can stream/seek large MP4 files instead of downloading the whole object.
     if (request.method === "GET") {
-      const object = await env.R2_BUCKET.get(key);
+      const range = request.headers.get("Range");
+      const object = await env.R2_BUCKET.get(key, range ? { range: parseRange(range) } : undefined);
       if (!object) return new Response("File not found", { status: 404, headers: corsHeaders });
+
       const headers = new Headers(corsHeaders);
       object.writeHttpMetadata(headers);
       headers.set("ETag", object.httpEtag);
+      headers.set("Accept-Ranges", "bytes");
+      headers.set("Cache-Control", "public, max-age=3600");
+      if (object.range) {
+        const size = object.size;
+        const startByte = object.range.offset || 0;
+        const endByte = typeof object.range.length === "number" ? startByte + object.range.length - 1 : size - 1;
+        headers.set("Content-Range", `bytes ${startByte}-${endByte}/${size}`);
+        headers.set("Content-Length", String(endByte - startByte + 1));
+        return new Response(object.body, { status: 206, headers });
+      }
+      headers.set("Content-Length", String(object.size));
       return new Response(object.body, { headers });
     }
 
