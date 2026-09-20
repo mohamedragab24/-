@@ -1,10 +1,9 @@
  "use client";
 
 import React, { useEffect, useState } from "react";
-import { getApp } from "firebase/app";
-import { getFunctions, httpsCallable } from "firebase/functions";
 
 const cache = new Map<string, string>();
+const R2_WORKER_URL = "https://fahmny-r2.mohamedragabewiess.workers.dev";
 
 export function R2MediaImage({
   src,
@@ -28,19 +27,13 @@ export function R2MediaImage({
       setResolved(cached);
       return () => { alive = false; };
     }
-    (async () => {
-      try {
-        const fn = httpsCallable(getFunctions(getApp(), "us-central1"), "getR2MediaUrl");
-        const result = await fn({ token: src });
-        const url = String((result.data as any)?.url || "");
-        if (url) {
-          cache.set(src, url);
-          if (alive) setResolved(url);
-        }
-      } catch (e) {
-        console.warn("R2 image resolve failed", e);
-      }
-    })();
+    const parts = src.split(":");
+    const key = src.startsWith("r2:") ? parts.slice(3).join(":") : parts.slice(2).join(":");
+    if (key) {
+      const url = `${R2_WORKER_URL}/${key.split("/").map(encodeURIComponent).join("/")}`;
+      cache.set(src, url);
+      if (alive) setResolved(url);
+    }
     return () => { alive = false; };
   }, [src]);
 

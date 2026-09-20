@@ -1,9 +1,9 @@
-import { getApp } from "firebase/app";
-import { getFunctions, httpsCallable } from "firebase/functions";
 
 // R2-backed course media storage. IndexedDB is retained only for local previews.
 
 // Allows uploading actual high-definition video files and images without external links.
+
+export const R2_WORKER_URL = "https://fahmny-r2.mohamedragabewiess.workers.dev";
 
 const DB_NAME = "FahimtCourseMediaDB";
 const STORE_VIDEOS = "course_videos";
@@ -86,16 +86,9 @@ export async function resolveMediaUrl(url: string): Promise<string> {
   if (!url) return "";
 
   if (url.startsWith("r2:") || url.startsWith("r2cover:")) {
-    try {
-      const functions = getFunctions(getApp(), "us-central1");
-      const callable = httpsCallable(functions, "getR2MediaUrl");
-      const result = await callable({ token: url });
-      const data = result.data as { url?: string };
-      return data.url || "";
-    } catch (err) {
-      console.warn("Could not resolve R2 media URL:", err);
-      return "";
-    }
+    const parts = url.split(":");
+    const key = url.startsWith("r2:") ? parts.slice(3).join(":") : parts.slice(2).join(":");
+    return key ? `${R2_WORKER_URL}/${key.split("/").map(encodeURIComponent).join("/")}` : "";
   }
 
   if (url.startsWith("indexeddb:video:")) {
@@ -130,18 +123,18 @@ export async function uploadToR2(
   kind: "cover" | "lesson",
   lessonNumber?: number
 ): Promise<{ token: string; key: string; previewUrl: string }> {
-  const functions = getFunctions(getApp(), "us-central1");
-  const callable = httpsCallable(functions, "createR2UploadUrl");
-  const result = await callable({
-    courseId,
-    kind,
-    lessonNumber: lessonNumber || 0,
-    fileName: file.name,
-    contentType: file.type || "application/octet-stream",
-  });
-  const data = result.data as { uploadUrl?: string; url?: string; token: string; key: string };
-  const uploadUrl = data.uploadUrl || data.url;
-  if (!uploadUrl) throw new Error("R2 upload URL was not returned");
+  if (!courseId) throw new Error("courseId is required");
+  if (kind === "lesson" && (!lessonNumber || lessonNumber < 1 || lessonNumber > 110)) {
+    throw new Error("رقم الدرس غير صحيح");
+  }
+
+  const safeName = (file.name || "file.bin").replace(/[^a-zA-Z0-9._-]/g, "_").slice(-180) || "file.bin";
+  const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const key = kind === "cover"
+    ? `courses/${courseId}/cover/${stamp}_${safeName}`
+    : `courses/${courseId}/lessons/${String(lessonNumber).padStart(2, "0")}/${stamp}_${safeName}`;
+
+  const uploadUrl = `${R2_WORKER_URL}/${key.split("/").map(encodeURIComponent).join("/")}`;
   const contentType = file.type || "application/octet-stream";
   let response: Response;
   try {
@@ -151,16 +144,31 @@ export async function uploadToR2(
       headers: { "Content-Type": contentType },
       body: file,
     });
-  } catch (networkError) {
+  } catch {
     throw new Error(
-      "تعذر الاتصال بـ Cloudflare R2. تأكد من إعداد CORS للـBucket fahmny-videos والسماح لدومين المنصة بطلب PUT."
+      "تعذر الاتصال بخدمة Cloudflare R2. تأكد أن Worker يعمل وأن CORS يسمح بالرفع من المنصة."
     );
   }
+
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`R2 upload failed: ${response.status}${body ? ` - ${body.slice(0, 300)}` : ""}`);
+    throw new Error(`R2 Worker upload failed: ${response.status}${body ? ` - ${body.slice(0, 300)}` : ""}`);
   }
-  return { token: data.token, key: data.key, previewUrl: URL.createObjectURL(file) };
+
+  const data = await response.json().catch(() => null) as { success?: boolean; key?: string } | null;
+  if (!data?.success || data.key !== key) {
+    throw new Error("Cloudflare Worker لم يؤكد حفظ الملف في R2");
+  }
+
+  const token = kind === "cover"
+    ? `r2cover:${courseId}:${key}`
+    : `r2:${courseId}:${lessonNumber}:${key}`;
+
+  return {
+    token,
+    key,
+    previewUrl: URL.createObjectURL(file),
+  };
 }
 
 /**

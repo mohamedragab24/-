@@ -425,27 +425,22 @@ exports.getJaasMeetingToken = onCall(async (request) => {
   return { token, appId, room: `${appId}/${room}` };
 });
 
-/** JaaS webhook: preserve uploaded lecture recordings in Firebase Storage. */
-exports.jaasRecordingWebhook = require('firebase-functions/v2/https').onRequest({ secrets: R2_SECRETS }, async (req, res) => {
+/** JaaS webhook: forward the recording URL to the Cloudflare Worker.
+ * The Worker downloads the recording and stores it in R2, so this function
+ * no longer needs R2 S3 credentials / Firebase Secret Manager.
+ */
+const R2_WORKER_URL = 'https://fahmny-r2.mohamedragabewiess.workers.dev';
+exports.jaasRecordingWebhook = require('firebase-functions/v2/https').onRequest(async (req, res) => {
   try {
-    const event = req.body || {};
-    const type = String(event.event || event.type || '').toUpperCase();
-    if (type !== 'RECORDING_UPLOADED' && type !== 'RECORDING_ENDED') { res.status(200).send('ignored'); return; }
-    const data = event.data || event;
-    const url = data.preAuthenticatedLink || data.preAuthenticatedUrl || data.recordingUrl || data.url;
-    if (!url) { res.status(400).send('missing recording url'); return; }
-    const room = String(data.roomName || data.room || data.conferenceId || 'unknown-room');
-    const requestId = String(data.requestId || data.meetingId || room.replace(/^.*Fahimni_/, ''));
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`recording download failed: ${response.status}`);
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const r2Key = `meetings/${requestId}/${Date.now()}.mp4`;
-    await putObject(r2Key, buffer, 'video/mp4');
-    await db.collection('istifhams').doc(requestId).set({
-      recordingR2Key: r2Key,
-      recordingSavedAt: admin.firestore.FieldValue.serverTimestamp(),
-      recordingSource: 'jaas-r2'
-    }, { merge: true });
-    res.status(200).json({ ok: true, r2Key });
-  } catch (e) { console.error(e); res.status(500).send('webhook error'); }
+    const response = await fetch(`${R2_WORKER_URL}/__jaas/recording`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body || {}),
+    });
+    const body = await response.text();
+    res.status(response.status).send(body);
+  } catch (e) {
+    console.error(e);
+    res.status(500).send('webhook proxy error');
+  }
 });

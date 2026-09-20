@@ -54,3 +54,17 @@ firebase deploy --only functions
 6. فتح الكورس من التطبيق وتشغيل الفيديو.
 7. تشغيل محاضرة JaaS وتأكد أن التسجيل يظهر في `meetings/...`.
 
+
+## الربط المباشر عبر Cloudflare Worker
+المنصة في هذه النسخة ترفع صور وفيديوهات الكورسات مباشرة إلى:
+`https://fahmny-r2.mohamedragabewiess.workers.dev`
+
+وتستخدم المسارات:
+- `courses/{courseId}/cover/...`
+- `courses/{courseId}/lessons/{number}/...`
+
+ولا تحتاج عملية رفع الكورس إلى `createR2UploadUrl` أو R2 secrets داخل Firebase.
+
+تسجيلات JaaS تستخدم مسار Worker:
+`/__jaas/recording`
+
