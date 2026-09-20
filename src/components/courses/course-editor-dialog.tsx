@@ -649,10 +649,14 @@ export function CourseEditorDialog({
                   <div className="md:col-span-2 space-y-1">
                     <Label className="text-xs font-bold text-zinc-700">عنوان الدرس:</Label>
                     <Input
-                      value={newLessonTitle}
-                      onChange={(e) => setNewLessonTitle(e.target.value)}
-                      placeholder="عنوان الدرس (مثال: الدرس 1: بيئة العمل وأساسيات اللغة)"
+                      value={newLessonTitle ? `${lessons.length + 1}. ${cleanLessonTitle(newLessonTitle)}` : `${lessons.length + 1}. `}
+                      onChange={(e) => {
+                        const value = e.target.value.replace(/^\s*\d+\s*[.\-]\s*/u, "");
+                        setNewLessonTitle(value);
+                      }}
+                      placeholder={`${lessons.length + 1}. عنوان الدرس`}
                       className="rounded-xl font-bold text-sm h-11"
+                      dir="rtl"
                     />
                   </div>
 

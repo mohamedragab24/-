@@ -142,12 +142,24 @@ export async function uploadToR2(
   const data = result.data as { uploadUrl?: string; url?: string; token: string; key: string };
   const uploadUrl = data.uploadUrl || data.url;
   if (!uploadUrl) throw new Error("R2 upload URL was not returned");
-  const response = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: { "Content-Type": file.type || "application/octet-stream" },
-    body: file,
-  });
-  if (!response.ok) throw new Error(`R2 upload failed: ${response.status}`);
+  const contentType = file.type || "application/octet-stream";
+  let response: Response;
+  try {
+    response = await fetch(uploadUrl, {
+      method: "PUT",
+      mode: "cors",
+      headers: { "Content-Type": contentType },
+      body: file,
+    });
+  } catch (networkError) {
+    throw new Error(
+      "تعذر الاتصال بـ Cloudflare R2. تأكد من إعداد CORS للـBucket fahmny-videos والسماح لدومين المنصة بطلب PUT."
+    );
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`R2 upload failed: ${response.status}${body ? ` - ${body.slice(0, 300)}` : ""}`);
+  }
   return { token: data.token, key: data.key, previewUrl: URL.createObjectURL(file) };
 }
 

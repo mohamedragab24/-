@@ -1,0 +1,13 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://fahmt-jonh-1s7o00cn6-fahemny.vercel.app",
+      "https://fragment-2q72m4xck-fahemny.vercel.app",
+      "http://localhost:3000"
+    ],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
