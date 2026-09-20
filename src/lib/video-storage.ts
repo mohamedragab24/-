@@ -121,7 +121,8 @@ export async function uploadToR2(
   file: File,
   courseId: string,
   kind: "cover" | "lesson",
-  lessonNumber?: number
+  lessonNumber?: number,
+  onProgress?: (percent: number) => void
 ): Promise<{ token: string; key: string; previewUrl: string }> {
   if (!courseId) throw new Error("courseId is required");
   if (kind === "lesson" && (!lessonNumber || lessonNumber < 1 || lessonNumber > 110)) {
@@ -138,12 +139,21 @@ export async function uploadToR2(
   const contentType = file.type || "application/octet-stream";
   let response: Response;
   try {
-    response = await fetch(uploadUrl, {
-      method: "PUT",
-      mode: "cors",
-      headers: { "Content-Type": contentType },
-      body: file,
+    response = await new Promise<Response>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", uploadUrl);
+      xhr.setRequestHeader("Content-Type", contentType);
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+      };
+      xhr.onload = () => {
+        resolve(new Response(xhr.responseText, { status: xhr.status, statusText: xhr.statusText }));
+      };
+      xhr.onerror = () => reject(new Error("network"));
+      xhr.onabort = () => reject(new Error("aborted"));
+      xhr.send(file);
     });
+    onProgress?.(100);
   } catch {
     throw new Error(
       "تعذر الاتصال بخدمة Cloudflare R2. تأكد أن Worker يعمل وأن CORS يسمح بالرفع من المنصة."
@@ -291,12 +301,13 @@ export function compressImageToDataUrl(
 export async function processVideoFile(
   file: File,
   courseId?: string,
-  lessonNumber?: number
+  lessonNumber?: number,
+  onProgress?: (percent: number) => void
 ): Promise<{ token: string; previewUrl: string }> {
   const previewUrl = URL.createObjectURL(file);
   if (!courseId) {
     return { token: previewUrl, previewUrl };
   }
-  const uploaded = await uploadToR2(file, courseId, "lesson", lessonNumber);
+  const uploaded = await uploadToR2(file, courseId, "lesson", lessonNumber, onProgress);
   return { token: uploaded.token, previewUrl: uploaded.previewUrl };
 }

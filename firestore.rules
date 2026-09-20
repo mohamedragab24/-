@@ -48,7 +48,9 @@ service cloud.firestore {
     // المحادثات المباشرة والتواصل التلقائي
     match /direct_chats/{chatId} {
       allow read, update: if isAdmin() || (isSignedIn() && (request.auth.uid in resource.data.participants));
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && (
+        isAdmin() || request.resource.data.instructorId == request.auth.uid
+      );
 
       match /messages/{msgId} {
         allow read, create: if isAdmin() || (isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/direct_chats/$(chatId)).data.participants));
@@ -128,12 +130,15 @@ service cloud.firestore {
     // الكورسات الجاهزة والدروس والاشتراكات
     match /courses/{courseId} {
       allow read: if true;
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && (
+        isAdmin() || request.resource.data.instructorId == request.auth.uid
+      );
       allow update, delete: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.instructorId);
 
       match /lessons/{lessonId} {
         allow read: if true;
-        allow write: if isAdmin() || (isSignedIn() && request.auth.uid == get(/databases/$(database)/documents/courses/$(courseId)).data.instructorId);
+        allow write: if isAdmin() || (isSignedIn() && request.auth.uid ==
+          getAfter(/databases/$(database)/documents/courses/$(courseId)).data.instructorId);
       }
     }
 

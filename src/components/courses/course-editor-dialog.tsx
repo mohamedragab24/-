@@ -86,6 +86,7 @@ export function CourseEditorDialog({
   const [draftCourseId, setDraftCourseId] = useState(courseToEdit?.id || "");
   const [coverFileName, setCoverFileName] = useState("");
   const [isProcessingCover, setIsProcessingCover] = useState(false);
+  const [coverUploadProgress, setCoverUploadProgress] = useState(0);
   const [isCoverDragging, setIsCoverDragging] = useState(false);
 
   const [price, setPrice] = useState<number>(courseToEdit?.price || 100);
@@ -102,6 +103,7 @@ export function CourseEditorDialog({
   const [selectedVideoName, setSelectedVideoName] = useState("");
   const [selectedVideoSize, setSelectedVideoSize] = useState("");
   const [isProcessingVideo, setIsProcessingVideo] = useState(false);
+  const [videoUploadProgress, setVideoUploadProgress] = useState(0);
   const [isVideoDragging, setIsVideoDragging] = useState(false);
   const [newLessonDuration, setNewLessonDuration] = useState(15);
   const [newLessonIsFree, setNewLessonIsFree] = useState(false);
@@ -155,8 +157,9 @@ export function CourseEditorDialog({
       return;
     }
     setIsProcessingCover(true);
+    setCoverUploadProgress(0);
     try {
-      const uploaded = await uploadToR2(file, draftCourseId, "cover");
+      const uploaded = await uploadToR2(file, draftCourseId, "cover", undefined, setCoverUploadProgress);
       setCoverUrl(uploaded.token);
       setCoverPreviewUrl(uploaded.previewUrl);
       setCoverFileName(`${file.name} (${formatBytes(file.size)})`);
@@ -186,10 +189,11 @@ export function CourseEditorDialog({
       return;
     }
     setIsProcessingVideo(true);
+    setVideoUploadProgress(0);
     try {
       const sizeStr = formatBytes(file.size);
       const durationMin = await extractVideoDuration(file);
-      const { token, previewUrl } = await processVideoFile(file, draftCourseId, lessons.length + 1);
+      const { token, previewUrl } = await processVideoFile(file, draftCourseId, lessons.length + 1, setVideoUploadProgress);
 
       setSelectedVideoToken(token);
       setSelectedVideoPreview(previewUrl);
@@ -453,6 +457,13 @@ export function CourseEditorDialog({
                 )}
               </div>
 
+              {isProcessingCover && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs font-bold text-primary"><span>جاري رفع صورة الغلاف...</span><span>{coverUploadProgress}%</span></div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-primary transition-all" style={{ width: `${coverUploadProgress}%` }} /></div>
+                </div>
+              )}
+
               {/* Hidden file input */}
               <input
                 ref={coverFileRef}
@@ -565,11 +576,11 @@ export function CourseEditorDialog({
                     رفع درس وفيديو جديد من جهازك:
                   </h4>
                   {isProcessingVideo && (
-                    <span className="text-xs font-bold text-primary flex items-center gap-1">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      جاري معالجة الفيديو...
-                    </span>
-                  )}
+                     <div className="flex min-w-[180px] flex-col gap-1">
+                       <div className="flex justify-between text-xs font-bold text-primary"><span>جاري رفع الفيديو...</span><span>{videoUploadProgress}%</span></div>
+                       <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-primary transition-all" style={{ width: `${videoUploadProgress}%` }} /></div>
+                     </div>
+                   )}
                 </div>
 
                 {/* Hidden video file input */}
