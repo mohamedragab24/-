@@ -1,4 +1,3 @@
-import { R2MediaImage } from "@/components/r2-media-image";
 "use client";
 import React,{useState} from 'react';
 import { useFirestore,useUser,useDoc,useMemoFirebase,useCollection } from '@/firebase';
