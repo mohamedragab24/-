@@ -54,36 +54,70 @@ export async function uploadCourseFile(storage: FirebaseStorage, file: File, cou
   return { storagePath: path, downloadUrl: url, fileName: file.name, fileSize: file.size };
 }
 
-export async function saveCourseWithLessons(db: Firestore, course: Course, lessons: CourseLesson[], existingLessonIds: string[] = []) {
-  const batch = writeBatch(db);
+export async function saveCourseWithLessons(
+  db: Firestore,
+  course: Course,
+  lessons: CourseLesson[],
+  existingLessonIds: string[] = []
+) {
+  // Save the parent course first. This intentionally avoids relying on
+  // Firestore getAfter() for lesson writes, which can reject a perfectly
+  // valid instructor batch when the course is being created for the first time.
   const courseRef = doc(db, 'courses', course.id);
   const courseData = { ...course } as any;
   delete courseData.lessons;
-  batch.set(courseRef, { ...courseData, updatedAt: serverTimestamp() }, { merge: true });
-  const keep = new Set(lessons.map(l => l.id));
-  existingLessonIds.filter(id => !keep.has(id)).forEach(id => batch.delete(doc(db, 'courses', course.id, 'lessons', id)));
+
+  await writeBatch(db)
+    .set(
+      courseRef,
+      { ...courseData, updatedAt: serverTimestamp() },
+      { merge: true }
+    )
+    .commit();
+
+  // The course now exists, so Firestore rules can safely verify that the
+  // signed-in user owns it before allowing lesson writes.
+  const lessonBatch = writeBatch(db);
+  const keep = new Set(lessons.map((l) => l.id));
+
+  existingLessonIds
+    .filter((id) => !keep.has(id))
+    .forEach((id) => {
+      lessonBatch.delete(doc(db, 'courses', course.id, 'lessons', id));
+    });
+
   lessons.forEach((lesson, index) => {
-    const ref = doc(db, 'courses', course.id, 'lessons', lesson.id);
+    const lessonRef = doc(db, 'courses', course.id, 'lessons', lesson.id);
     const videoToken = String(lesson.videoUrl || '');
-    const r2Key = videoToken.startsWith('r2:') ? videoToken.split(':').slice(3).join(':') : '';
-    batch.set(ref, {
-      title: lesson.title,
-      description: lesson.description || '',
-      storagePath: lesson.storagePath || '',
-      r2Key,
-      videoUrl: videoToken,
-      videoFileName: lesson.videoFileName || '',
-      videoFileSize: lesson.videoFileSize || '',
-      durationMinutes: lesson.durationMinutes,
-      durationSeconds: lesson.durationSeconds || Math.round(lesson.durationMinutes * 60),
-      order: index + 1,
-      lessonNumber: index + 1,
-      isPreview: index === 0,
-      isFreePreview: index === 0,
-      updatedAt: serverTimestamp(),
-    }, { merge: true });
+    const r2Key = videoToken.startsWith('r2:')
+      ? videoToken.split(':').slice(3).join(':')
+      : '';
+
+    lessonBatch.set(
+      lessonRef,
+      {
+        title: lesson.title,
+        description: lesson.description || '',
+        storagePath: lesson.storagePath || '',
+        r2Key,
+        videoUrl: videoToken,
+        videoFileName: lesson.videoFileName || '',
+        videoFileSize: lesson.videoFileSize || '',
+        durationMinutes: lesson.durationMinutes,
+        durationSeconds:
+          lesson.durationSeconds ||
+          Math.round(lesson.durationMinutes * 60),
+        order: index + 1,
+        lessonNumber: index + 1,
+        isPreview: index === 0,
+        isFreePreview: index === 0,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
   });
-  await batch.commit();
+
+  await lessonBatch.commit();
 }
 
 export async function reviewCourse(db: Firestore, courseId: string, reviewerId: string, reviewerName: string, decision: 'approved' | 'rejected', rejectionReason?: string) {

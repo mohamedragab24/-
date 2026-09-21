@@ -91,7 +91,7 @@ export function CourseEditorDialog({
 
   const [price, setPrice] = useState<number>(courseToEdit?.price || 100);
   const [category, setCategory] = useState(courseToEdit?.category || "البرمجة والتقنية");
-  const [isPublished, setIsPublished] = useState<boolean>(courseToEdit ? courseToEdit.isPublished : true);
+  const [isPublished, setIsPublished] = useState<boolean>(courseToEdit ? courseToEdit.isPublished : false);
   
   // Lessons list
   const [lessons, setLessons] = useState<CourseLesson[]>(courseToEdit?.lessons || []);
@@ -137,7 +137,7 @@ export function CourseEditorDialog({
       setCoverFileName("");
       setPrice(100);
       setCategory("البرمجة والتقنية");
-      setIsPublished(true);
+      setIsPublished(false);
       setLessons([]);
     }
     // Reset new lesson form
@@ -302,6 +302,14 @@ export function CourseEditorDialog({
   };
 
   const handleSaveCourse = async () => {
+    if (isProcessingCover || isProcessingVideo) {
+      toast({
+        title: "انتظر اكتمال الرفع",
+        description: "لا يمكن حفظ الكورس قبل انتهاء رفع الصورة أو الفيديو.",
+        variant: "destructive"
+      });
+      return;
+    }
     if (!title.trim()) {
       toast({ title: "خطأ", description: "يرجى إدخال اسم الكورس.", variant: "destructive" });
       return;
@@ -460,7 +468,7 @@ export function CourseEditorDialog({
               {isProcessingCover && (
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs font-bold text-primary"><span>جاري رفع صورة الغلاف...</span><span>{coverUploadProgress}%</span></div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-primary transition-all" style={{ width: `${coverUploadProgress}%` }} /></div>
+                  <div className="h-3 w-full overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-primary transition-all duration-200" style={{ width: `${coverUploadProgress}%` }} /></div>
                 </div>
               )}
 
@@ -578,7 +586,7 @@ export function CourseEditorDialog({
                   {isProcessingVideo && (
                      <div className="flex min-w-[180px] flex-col gap-1">
                        <div className="flex justify-between text-xs font-bold text-primary"><span>جاري رفع الفيديو...</span><span>{videoUploadProgress}%</span></div>
-                       <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-primary transition-all" style={{ width: `${videoUploadProgress}%` }} /></div>
+                       <div className="h-3 w-full overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-primary transition-all" style={{ width: `${videoUploadProgress}%` }} /></div>
                      </div>
                    )}
                 </div>
@@ -810,7 +818,7 @@ export function CourseEditorDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-xl font-bold">
               إلغاء
             </Button>
-            <Button onClick={handleSaveCourse} className="bg-primary hover:bg-primary/90 text-white font-black rounded-xl px-8">
+            <Button onClick={handleSaveCourse} disabled={isProcessingCover || isProcessingVideo} className="bg-primary hover:bg-primary/90 text-white font-black rounded-xl px-8 disabled:opacity-60">
               {courseToEdit ? "حفظ التعديلات" : "حفظ ونشر الكورس"}
             </Button>
           </DialogFooter>

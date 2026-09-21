@@ -130,15 +130,42 @@ service cloud.firestore {
     // الكورسات الجاهزة والدروس والاشتراكات
     match /courses/{courseId} {
       allow read: if true;
+
+      // إنشاء الكورس مسموح للمفهم المسجل فقط (أو للمسؤول).
+      // نقبل role=mufhem أو mode=mofahhem لأن المنصة القديمة والجديدة
+      // تستخدمان الحقلين في حساب المستخدم.
       allow create: if isSignedIn() && (
-        isAdmin() || request.resource.data.instructorId == request.auth.uid
+        isAdmin() ||
+        (
+          request.resource.data.instructorId == request.auth.uid &&
+          (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "mufhem" ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.mode == "mofahhem" ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "teacher"
+          )
+        )
       );
-      allow update, delete: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.instructorId);
+
+      allow update, delete: if isAdmin() || (
+        isSignedIn() &&
+        request.auth.uid == resource.data.instructorId &&
+        (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "mufhem" ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.mode == "mofahhem" ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "teacher"
+        )
+      );
 
       match /lessons/{lessonId} {
         allow read: if true;
-        allow write: if isAdmin() || (isSignedIn() && request.auth.uid ==
-          getAfter(/databases/$(database)/documents/courses/$(courseId)).data.instructorId);
+
+        // Parent course is already saved before lesson writes, so use get()
+        // instead of getAfter() for reliable permission checks.
+        allow write: if isAdmin() || (
+          isSignedIn() &&
+          request.auth.uid ==
+            get(/databases/$(database)/documents/courses/$(courseId)).data.instructorId
+        );
       }
     }
 
