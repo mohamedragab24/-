@@ -324,12 +324,13 @@ export default function AdminApprovals() {
             {!verificationsLoading && verifications?.length === 0 && <NoData message="لا توجد طلبات توثيق هوية معلقة." />}
           </div>
         </TabsContent>
+
+        <TabsContent value="courses" className="mt-0">
+          <CourseReviewPanel />
+        </TabsContent>
       </Tabs>
 
       {/* مودال مراجعة الصورة الشخصية */}
-      <TabsContent value="courses" className="mt-0">
-        <CourseReviewPanel />
-      </TabsContent>
 
       <Dialog open={!!selectedUser} onOpenChange={() => setSelectedUser(null)}>
         <DialogContent className="sm:max-w-[600px] rounded-[3rem]" dir="rtl">
