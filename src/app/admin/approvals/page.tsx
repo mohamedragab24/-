@@ -36,6 +36,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Label } from "@/components/ui/label";
 import { updateDocumentNonBlocking, addDocumentNonBlocking } from "@/firebase/non-blocking-updates";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { CourseReviewPanel } from "@/app/admin/course-reviews/page";
 
 export default function AdminApprovals() {
   const { user } = useUser();
@@ -218,7 +219,7 @@ export default function AdminApprovals() {
       </div>
 
       <Tabs defaultValue="profiles" className="w-full">
-        <TabsList className="grid w-full grid-cols-3 h-16 p-1 bg-muted rounded-2xl mb-8">
+        <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 h-auto md:h-16 p-1 bg-muted rounded-2xl mb-8 gap-1">
           <TabsTrigger value="profiles" className="rounded-xl text-lg font-bold">
             <ImageIcon className="ml-2 h-5 w-5" /> الصور ({profiles?.length || 0})
           </TabsTrigger>
@@ -227,6 +228,9 @@ export default function AdminApprovals() {
           </TabsTrigger>
           <TabsTrigger value="identity" className="rounded-xl text-lg font-bold">
             <IdCard className="ml-2 h-5 w-5" /> توثيق الهوية ({verifications?.length || 0})
+          </TabsTrigger>
+          <TabsTrigger value="courses" className="rounded-xl text-lg font-bold">
+            <FileCheck className="ml-2 h-5 w-5" /> مراجعة الكورسات
           </TabsTrigger>
         </TabsList>
 
@@ -323,6 +327,10 @@ export default function AdminApprovals() {
       </Tabs>
 
       {/* مودال مراجعة الصورة الشخصية */}
+      <TabsContent value="courses" className="mt-0">
+        <CourseReviewPanel />
+      </TabsContent>
+
       <Dialog open={!!selectedUser} onOpenChange={() => setSelectedUser(null)}>
         <DialogContent className="sm:max-w-[600px] rounded-[3rem]" dir="rtl">
           <DialogHeader>
