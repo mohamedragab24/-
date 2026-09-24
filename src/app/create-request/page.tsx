@@ -22,10 +22,6 @@ function CreateRequestContent() {
   const { toast } = useToast();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [couponCode, setCouponCode] = useState("");
-  const [isValidatingCoupon, setIsValidatingCoupon] = useState(false);
-  const [appliedCoupon, setAppliedCoupon] = useState<any>(null);
-
   const [formData, setFormData] = useState({ 
     title: "", 
     description: "", 
@@ -54,41 +50,14 @@ function CreateRequestContent() {
   const subCategories = allCategories?.filter(c => c.type === 'sub' && c.parentId === allCategories?.find(m => m.name === formData.category)?.id) || [];
   const optCategories = allCategories?.filter(c => c.type === 'option' && c.parentId === allCategories?.find(s => s.name === formData.categorySub)?.id) || [];
 
-  const handleValidateCoupon = async () => {
-    if (!firestore || !couponCode.trim()) return;
-    setIsValidatingCoupon(true);
-    try {
-      const couponRef = doc(firestore, "coupons", couponCode.trim().toUpperCase());
-      const snap = await getDoc(couponRef);
-      if (snap.exists() && snap.data().status === 'active') {
-        setAppliedCoupon(snap.data());
-        toast({ title: "تم تطبيق الخصم!" });
-      } else {
-        toast({ variant: "destructive", title: "كوبون غير صالح أو منتهي" });
-        setAppliedCoupon(null);
-      }
-    } catch (e) {
-      toast({ variant: "destructive", title: "فشل التحقق من الكوبون" });
-    } finally {
-      setIsValidatingCoupon(false);
-    }
-  };
-
-  const calculateFinalAmount = () => {
-    const base = Number(formData.amount) || 0;
-    if (!appliedCoupon) return base;
-    if (appliedCoupon.type === 'fixed') return Math.max(0, base - appliedCoupon.value);
-    return Math.max(0, base * (1 - appliedCoupon.value / 100));
-  };
-
   const handleCreate = async () => {
-    if (!formData.title || !formData.description || !formData.goal || !formData.category || !formData.amount || !formData.meetingTime) {
+    if (!formData.title || !formData.description || !formData.goal || !formData.category || !formData.meetingTime) {
       toast({ variant: "destructive", title: "بيانات ناقصة", description: "يرجى تعبئة كافة الحقول المطلوبة." });
       return;
     }
 
     if (!user) {
-      localStorage.setItem('pending_istifham', JSON.stringify({ ...formData, coupon: appliedCoupon?.code }));
+      localStorage.setItem('pending_istifham', JSON.stringify({ ...formData, amount: 0 }));
       toast({ title: "خطوة واحدة تفصلك!", description: "يرجى تسجيل حسابك الآن ليتم نشر استفهامك تلقائياً." });
       router.push("/login?mode=signup&returnTo=create-request");
       return;
@@ -96,12 +65,11 @@ function CreateRequestContent() {
 
     setIsSubmitting(true);
     try {
-      const finalAmount = calculateFinalAmount();
       await addDoc(collection(firestore!, "istifhams"), {
         ...formData,
-        originalAmount: Number(formData.amount),
-        amount: finalAmount,
-        couponApplied: appliedCoupon?.code || null,
+        originalAmount: 0,
+        amount: 0,
+        couponApplied: null,
         status: "pending_approval",
         mustafhemId: user.uid,
         mustafhemName: user.displayName || "مستخدم",
@@ -199,20 +167,10 @@ function CreateRequestContent() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
-            <div className="space-y-3">
-              <Label className="font-black text-lg flex items-center gap-2">الميزانية المقترحة <BadgeCent size={18} className="text-green-600"/></Label>
-              <Input 
-                type="number" 
-                value={formData.amount} 
-                onChange={(e)=>setFormData({...formData, amount: e.target.value})} 
-                className="h-16 rounded-2xl border-2 font-black text-3xl text-center shadow-inner" 
-                placeholder="0.00"
-              />
-              {appliedCoupon && (
-                <p className="text-xs text-green-600 font-black text-center animate-bounce">
-                  السعر بعد الخصم: {calculateFinalAmount()} ج.م
-                </p>
-              )}
+            <div className="p-6 rounded-3xl bg-emerald-50 border-2 border-emerald-100 text-center space-y-2">
+              <div className="text-sm font-black text-emerald-700">الخدمة مجانية حاليًا</div>
+              <div className="text-4xl font-black text-emerald-800">0 ج.م</div>
+              <p className="text-xs font-bold text-emerald-700">لا تحتاج لإدخال سعر أو كوبون أثناء الفترة المجانية.</p>
             </div>
             <div className="space-y-3">
               <Label className="font-black text-lg flex items-center gap-2">الموعد المفضل <Clock size={18} className="text-blue-600"/></Label>
@@ -222,26 +180,6 @@ function CreateRequestContent() {
                 onChange={(e)=>setFormData({...formData, meetingTime: e.target.value})} 
                 className="h-16 rounded-2xl border-2 font-bold px-6 shadow-sm" 
               />
-            </div>
-          </div>
-
-          <div className="p-6 bg-zinc-50 rounded-3xl border-2 border-dashed space-y-4">
-            <Label className="font-black flex items-center gap-2"><Ticket size={18} className="text-primary"/> هل لديك كوبون خصم؟</Label>
-            <div className="flex gap-2">
-              <Input 
-                placeholder="أدخل الرمز هنا..." 
-                className="h-12 rounded-xl border-2 font-bold uppercase"
-                value={couponCode}
-                onChange={(e) => setCouponCode(e.target.value)}
-              />
-              <Button 
-                variant="outline" 
-                onClick={handleValidateCoupon} 
-                disabled={isValidatingCoupon || !couponCode}
-                className="h-12 px-6 rounded-xl border-primary text-primary font-black"
-              >
-                {isValidatingCoupon ? <Loader2 className="animate-spin h-4 w-4" /> : (appliedCoupon ? <Check className="h-4 w-4" /> : "تحقق")}
-              </Button>
             </div>
           </div>
 

@@ -362,7 +362,9 @@ export default function CoursesPage() {
                             {course.category}
                           </Badge>
                           <div className="absolute bottom-4 left-4 bg-primary text-white font-black px-3.5 py-1.5 rounded-xl shadow-lg font-mono text-sm">
-                            {course.price} ج.م
+                            {(course.price || 0) <= 0 ? "مجاني" : (course.promotionalPrice && course.promotionalPrice < course.price ? (
+                              <span className="flex items-center gap-2"><span className="line-through opacity-70">{course.price} ج.م</span><span>{course.promotionalPrice} ج.م</span></span>
+                            ) : `${course.price} ج.م`)}
                           </div>
                         </div>
 
