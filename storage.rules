@@ -4,6 +4,10 @@ service firebase.storage {
     function signedIn() { return request.auth != null; }
     function admin() { return signedIn() && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin == true; }
     function ownsCourse(courseId) { return signedIn() && firestore.get(/databases/(default)/documents/courses/$(courseId)).data.instructorId == request.auth.uid; }
+    match /notifications/{allPaths=**} {
+      allow read: if true;
+      allow write: if admin();
+    }
     match /courses/{courseId}/{allPaths=**} {
       allow read: if signedIn();
       allow write: if admin() || ownsCourse(courseId);

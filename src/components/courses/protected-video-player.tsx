@@ -29,6 +29,7 @@ interface ProtectedVideoPlayerProps {
   onToggleComplete?: () => void;
   onNextLesson?: () => void;
   hasNextLesson?: boolean;
+  previewLimitSeconds?: number;
 }
 
 export function ProtectedVideoPlayer({
@@ -41,7 +42,8 @@ export function ProtectedVideoPlayer({
   isCompleted = false,
   onToggleComplete,
   onNextLesson,
-  hasNextLesson = false
+  hasNextLesson = false,
+  previewLimitSeconds
 }: ProtectedVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -57,6 +59,7 @@ export function ProtectedVideoPlayer({
   const [currentTimeFormatted, setCurrentTimeFormatted] = useState("");
   const [resolvedSrc, setResolvedSrc] = useState(videoUrl);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [previewEnded, setPreviewEnded] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -205,7 +208,13 @@ export function ProtectedVideoPlayer({
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
+      const t = videoRef.current.currentTime;
+      setCurrentTime(t);
+      if (previewLimitSeconds && !previewEnded && t >= previewLimitSeconds) {
+        videoRef.current.pause();
+        setIsPlaying(false);
+        setPreviewEnded(true);
+      }
     }
   };
 
@@ -216,16 +225,15 @@ export function ProtectedVideoPlayer({
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const targetTime = Number(e.target.value);
-    if (videoRef.current) {
-      videoRef.current.currentTime = targetTime;
-      setCurrentTime(targetTime);
-    }
+    let targetTime = Number(e.target.value);
+    if (previewLimitSeconds) targetTime = Math.min(targetTime, previewLimitSeconds);
+    if (videoRef.current) { videoRef.current.currentTime = targetTime; setCurrentTime(targetTime); }
   };
 
   const seekBy = (seconds: number) => {
     if (!videoRef.current) return;
-    videoRef.current.currentTime = Math.max(0, Math.min(duration || 0, videoRef.current.currentTime + seconds));
+    const max = previewLimitSeconds ? Math.min(duration || previewLimitSeconds, previewLimitSeconds) : (duration || 0);
+    videoRef.current.currentTime = Math.max(0, Math.min(max, videoRef.current.currentTime + seconds));
   };
 
   const setSpeed = (rate: number) => {

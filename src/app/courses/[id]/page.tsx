@@ -39,7 +39,7 @@ import { ProtectedVideoPlayer } from "@/components/courses/protected-video-playe
 import { CoursePurchaseDialog } from "@/components/courses/course-purchase-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useFirebase, useFirestore, useDoc, useMemoFirebase, useCollection } from "@/firebase";
-import { doc, collection } from "firebase/firestore";
+import { doc, collection, getDoc } from "firebase/firestore";
 
 export default function CourseDetailPage() {
   const params = useParams();
@@ -71,19 +71,24 @@ export default function CourseDetailPage() {
   const currentUserName = profile?.name || user?.displayName || "مستفهم منصة فهمت";
   const currentUserEmail = user?.email || profile?.email || "student@fahimt.com";
 
-  const refreshCourseState = () => {
+  const refreshCourseState = async () => {
     if (!courseId) return;
     const found = getCourseById(courseId);
     setCourse(found || null);
-
-    const enrolled = isUserEnrolled(courseId, currentUserId);
+    let enrolled = false;
+    if (firestore && user?.uid) {
+      try {
+        const purchaseSnap = await getDoc(doc(firestore, 'purchases', `${user.uid}_${courseId}`));
+        enrolled = purchaseSnap.exists() && purchaseSnap.data()?.status === 'completed';
+      } catch (_) {
+        enrolled = false;
+      }
+    }
     setIsEnrolled(enrolled);
 
-    if (enrolled) {
-      const enrollments = getStoredEnrollments();
-      const myEnroll = enrollments.find(e => e.courseId === courseId && e.studentId === currentUserId);
-      setUserEnrollment(myEnroll || null);
-    }
+    const enrollments = getStoredEnrollments();
+    const myEnroll = enrollments.find(e => e.courseId === courseId && e.studentId === currentUserId);
+    setUserEnrollment(myEnroll || null);
   };
 
   const [isSubscribed, setIsSubscribed] = useState(false);
@@ -115,7 +120,7 @@ export default function CourseDetailPage() {
   };
 
   useEffect(() => {
-    refreshCourseState();
+    void refreshCourseState();
 
     const handleUpdate = () => refreshCourseState();
     window.addEventListener("fahimt_courses_updated", handleUpdate);
@@ -151,22 +156,14 @@ export default function CourseDetailPage() {
   );
 
   // Helper to determine if a lesson is locked for the current user
+  // The website is preview-only. Full lessons are available in the mobile app.
   const isLessonLocked = (index: number) => {
-    // If the student bought the course or the instructor is viewing their own course, nothing is locked
-    if (isEnrolled || isInstructor) return false;
-
-    // Only the very first lesson (index 0) can be a free preview if marked
-    if (index === 0 && course.lessons[0]?.isFreePreview) {
-      return false;
-    }
-
-    // ALL other lessons (lesson 2, 3, etc.) are strictly locked with a padlock
-    return true;
+    return !(index === 0 && Boolean(course.lessons[0]?.isFreePreview));
   };
 
   const activeLesson: CourseLesson | undefined = course.lessons[selectedLessonIndex] || course.lessons[0];
   const activeLessonLocked = isLessonLocked(selectedLessonIndex);
-  const canPlayActiveLesson = !activeLessonLocked;
+  const canPlayActiveLesson = !activeLessonLocked && !isEnrolled && Boolean(activeLesson?.isFreePreview);
   const isCurrentCompleted = userEnrollment?.completedLessonIds?.includes(activeLesson?.id || "") || false;
 
   const handleToggleLessonComplete = () => {
@@ -187,11 +184,11 @@ export default function CourseDetailPage() {
     const locked = isLessonLocked(index);
     if (locked) {
       toast({
-        variant: "destructive",
-        title: "🔒 هذا الدرس مغلق بقفل",
-        description: `الدرس "${lesson.title}" مغلق ولا يمكن فتحه إلا بعد شراء الكورس الكامل.`
+        variant: isEnrolled ? "default" : "destructive",
+        title: isEnrolled ? "المشاهدة الكاملة داخل التطبيق" : "هذه الحلقة متاحة بعد الشراء",
+        description: isEnrolled ? "افتح التطبيق لمشاهدة الحلقة كاملة." : `الدرس "${lesson.title}" متاح بعد شراء الكورس.`,
       });
-      setPurchaseOpen(true);
+      if (!isEnrolled) setPurchaseOpen(true);
     }
     setSelectedLessonIndex(index);
   };
@@ -267,52 +264,27 @@ export default function CourseDetailPage() {
                   studentName={currentUserName}
                   studentEmail={currentUserEmail}
                   studentId={currentUserId}
-                  isCompleted={isCurrentCompleted}
-                  onToggleComplete={isEnrolled ? handleToggleLessonComplete : undefined}
-                  onNextLesson={handleNextLesson}
-                  hasNextLesson={selectedLessonIndex < course.lessons.length - 1}
+                  isCompleted={false}
+                  previewLimitSeconds={120}
                 />
-
-                {/* إشعار المعاينة المجانية في حال كان الدرس مفتوحاً للكل */}
-                {!isEnrolled && activeLesson.isFreePreview && (
-                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between text-right gap-4">
-                    <div className="space-y-0.5">
-                      <h5 className="font-black text-amber-900 text-sm">هذا الدرس متاح كمعاينة مجانية</h5>
-                      <p className="text-xs text-amber-700 font-bold">
-                        لمشاهدة بقية دروس الكورس ({course.lessons.length - 1} دروس إضافية) والحصول على الدعم الكامل، اشترك الآن.
-                      </p>
-                    </div>
-                    <Button
-                      onClick={() => setPurchaseOpen(true)}
-                      className="bg-primary text-white font-black text-xs h-10 px-5 rounded-xl shrink-0"
-                    >
-                      شراء الكورس ({course.price} ج.م)
-                    </Button>
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between text-right gap-4">
+                  <div className="space-y-0.5">
+                    <h5 className="font-black text-amber-900 text-sm">معاينة مجانية لمدة دقيقتين</h5>
+                    <p className="text-xs text-amber-700 font-bold">المشاهدة الكاملة لجميع الحلقات متاحة داخل تطبيق Fahimt بعد تسجيل الدخول بالحساب المشتري.</p>
                   </div>
-                )}
+                  <Button onClick={() => setPurchaseOpen(true)} className="bg-primary text-white font-black text-xs h-10 px-5 rounded-xl shrink-0">شراء الكورس ({course.price} ج.م)</Button>
+                </div>
               </div>
             ) : (
-              /* شاشة حجب المحتوى غير المشترك به - تصميم أمني مع قفل واضح */
               <div className="relative aspect-video rounded-3xl overflow-hidden bg-zinc-950 border-4 border-zinc-800 shadow-2xl flex flex-col items-center justify-center p-8 text-center text-white space-y-5">
-                <div className="w-20 h-20 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-500 backdrop-blur-md shadow-inner">
-                  <Lock className="w-10 h-10 stroke-[2.5]" />
-                </div>
+                <div className="w-20 h-20 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center text-primary backdrop-blur-md shadow-inner"><Lock className="w-10 h-10" /></div>
                 <div className="space-y-2 max-w-md">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/20 text-red-300 font-black text-xs border border-red-500/30">
-                    <Lock className="w-3.5 h-3.5" /> هذا الدرس مغلق بقفل ولا يفتح إلا بعد الشراء
-                  </div>
-                  <h3 className="text-2xl font-black">{activeLesson?.title || "الدرس محمي"}</h3>
-                  <p className="text-zinc-400 text-xs md:text-sm font-bold leading-relaxed">
-                    أنت تشاهد كورس مدفوع. تم قفل هذا الدرس وجميع الدروس التالية للحماية، وسيتم فتحها فوراً لك داخل المشغل بعد إتمام شراء الكورس.
-                  </p>
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/20 text-primary-foreground font-black text-xs border border-primary/30">المشاهدة الكاملة داخل التطبيق فقط</div>
+                  <h3 className="text-2xl font-black">{activeLesson?.title || "محتوى الكورس"}</h3>
+                  <p className="text-zinc-400 text-xs md:text-sm font-bold leading-relaxed">لا يتم تشغيل الحلقات الكاملة على المنصة. إذا كان حسابك مشتريًا للكورس، افتح الكورس من تطبيق Fahimt لمتابعة المشاهدة الكاملة.</p>
                 </div>
-                <Button
-                  onClick={() => setPurchaseOpen(true)}
-                  className="bg-primary hover:bg-primary/90 text-white font-black rounded-2xl h-14 px-8 text-base shadow-xl hover:scale-105 transition-all gap-2 cursor-pointer"
-                >
-                  <Lock className="w-5 h-5" />
-                  <span>شراء الكورس وفتح هذا الدرس ({course.price} ج.م)</span>
-                </Button>
+                {!isEnrolled && <Button onClick={() => setPurchaseOpen(true)} className="bg-primary hover:bg-primary/90 text-white font-black rounded-2xl h-14 px-8 text-base shadow-xl gap-2"><Lock className="w-5 h-5" /><span>شراء الكورس ({course.price} ج.م)</span></Button>}
+                {isEnrolled && <a href={`fahmny://course/${course.id}`} className="inline-flex items-center justify-center bg-primary hover:bg-primary/90 text-white font-black rounded-2xl h-14 px-8 text-base shadow-xl">فتح الكورس في التطبيق</a>}
               </div>
             )}
 
@@ -566,7 +538,7 @@ export default function CourseDetailPage() {
           studentName={currentUserName}
           studentEmail={currentUserEmail}
           onPurchaseSuccess={() => {
-            refreshCourseState();
+            void refreshCourseState();
             toast({
               title: "تم تفعيل الكورس بنجاح!",
               description: "يمكنك الآن مشاهدة جميع الدروس مباشرة."

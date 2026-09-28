@@ -224,7 +224,7 @@ function LandingPage({ router, settings }: any) {
                   />
                 </div>
                 <Button 
-                  onClick={() => router.push(`/create-request?title=${encodeURIComponent(searchTerm)}`)}
+                  onClick={() => router.push('/browse')}
                   className="h-16 md:h-24 px-12 rounded-[2.5rem] bg-accent hover:bg-accent/90 text-2xl font-black shadow-xl shadow-accent/20 transition-all hover:scale-[1.02]"
                 >
                   <MessageSquare className="ml-2" /> استفهم الآن
@@ -367,13 +367,13 @@ function MustafhemView({ profile, router }: any) {
   return (
     <div className="space-y-10">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="rounded-[2.5rem] p-8 bg-primary text-white space-y-4 shadow-xl hover:scale-[1.02] transition-all cursor-pointer" onClick={() => router.push('/create-request')}>
+        <Card className="rounded-[2.5rem] p-8 bg-primary text-white space-y-4 shadow-xl hover:scale-[1.02] transition-all cursor-pointer" onClick={() => router.push('/browse')}>
           <div className="bg-white/20 w-14 h-14 rounded-2xl flex items-center justify-center"><Plus size={28} /></div>
           <div className="space-y-1">
             <h2 className="text-2xl font-black">عندك سؤال؟</h2>
             <p className="text-primary-foreground/80 font-bold text-sm">اطرح استفهامك واحصل على شرح فوري.</p>
           </div>
-          <Button className="bg-white text-primary hover:bg-zinc-100 font-black rounded-xl h-12 text-sm w-full">طلب استفهام جديد</Button>
+          <Button className="bg-white text-primary hover:bg-zinc-100 font-black rounded-xl h-12 text-sm w-full">الذهاب إلى صفحة الاستفهامات</Button>
         </Card>
 
         <Card className="rounded-[2.5rem] p-8 border-2 bg-white space-y-4 hover:border-primary/20 transition-all cursor-pointer" onClick={() => router.push('/courses')}>

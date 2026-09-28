@@ -490,6 +490,19 @@ exports.jaasRecordingWebhook = require('firebase-functions/v2/https').onRequest(
 });
 
 
+/** Record privacy-conscious product analytics server-side. */
+exports.logAnalyticsEvent = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  const event = String(request.data?.event || '').trim().slice(0, 80);
+  if (!event) throw new HttpsError('invalid-argument', 'اسم الحدث مطلوب');
+  await db.collection('analyticsEvents').add({
+    uid, event, data: request.data?.data || {},
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  return { ok: true };
+});
+
 /** Record important user activity server-side for the admin Activity Log. */
 exports.logUserActivity = onCall(async (request) => {
   const uid = request.auth?.uid;
