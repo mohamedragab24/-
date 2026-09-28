@@ -201,5 +201,10 @@ service cloud.firestore {
     // الطعون والسحب المالي
     match /appeals/{id} { allow read, write: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.userId); }
     match /payoutRequests/{id} { allow read, write: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.userId); }
+    match /activityLogs/{logId} {
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.uid;
+      allow read: if isAdmin();
+    }
+
   }
 }

@@ -174,6 +174,29 @@ exports.onUserProfileUpdated = onDocumentUpdated("users/{userId}", async (event)
   await batch.commit();
 });
 
+/** Securely create a pending payment request for the current user. The actual purchase is completed only by the payment webhook. */
+exports.purchaseCourse = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  const courseId = String(request.data?.courseId || '').trim();
+  if (!courseId) throw new HttpsError('invalid-argument', 'معرف الكورس غير صحيح');
+  const courseSnap = await db.collection('courses').doc(courseId).get();
+  if (!courseSnap.exists) throw new HttpsError('not-found', 'الكورس غير موجود');
+  const course = courseSnap.data() || {};
+  if (course.status && course.status !== 'published' && course.isPublished !== true) {
+    throw new HttpsError('failed-precondition', 'الكورس غير منشور');
+  }
+  const existing = await db.collection('purchases').doc(`${uid}_${courseId}`).get();
+  if (existing.exists && existing.data()?.status === 'completed') {
+    return { ok: true, alreadyPurchased: true, amountPaid: Number(existing.data()?.amountPaid || course.price || 0) };
+  }
+  const paymentRef = await db.collection('payments').add({
+    uid, courseId, amount: Number(course.price || 0), status: 'pending',
+    source: 'app', createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  return { ok: true, paymentId: paymentRef.id, amountPaid: Number(course.price || 0) };
+});
+
 /**
  * Firestore trigger: whenever a payment document is marked completed,
  * automatically create/update the matching purchase document so the
@@ -194,6 +217,27 @@ exports.onPaymentCompleted = onDocumentCreated("payments/{paymentId}", async (ev
     purchasedAt: admin.firestore.FieldValue.serverTimestamp(),
     paymentId: event.params.paymentId,
   });
+
+  const courseSnap = await db.collection('courses').doc(payment.courseId).get();
+  const courseTitle = courseSnap.data()?.title || 'الكورس';
+  await db.collection('users').doc(payment.uid).collection('notifications').doc(`purchase_${event.params.paymentId}`).set({
+    title: 'تم تأكيد شراء الكورس',
+    body: `تم تفعيل ${courseTitle} في حسابك ويمكنك بدء المشاهدة الآن.`,
+    imageUrl: String(courseSnap.data()?.thumbnailUrl || ''),
+    type: 'purchase_completed', courseId: payment.courseId, read: false,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  const tokensSnap = await db.collection('users').doc(payment.uid).collection('fcmTokens').get();
+  const tokens = tokensSnap.docs.map(d => d.data()?.token).filter(Boolean);
+  if (tokens.length) {
+    for (let i = 0; i < tokens.length; i += 500) {
+      await admin.messaging().sendEachForMulticast({
+        tokens: tokens.slice(i, i + 500),
+        notification: { title: 'تم تأكيد شراء الكورس', body: `تم تفعيل ${courseTitle} في حسابك.`, ...(courseSnap.data()?.thumbnailUrl ? { imageUrl: String(courseSnap.data().thumbnailUrl) } : {}) },
+        data: { type: 'purchase_completed', courseId: String(payment.courseId) },
+      });
+    }
+  }
 });
 
 /**
@@ -443,4 +487,63 @@ exports.jaasRecordingWebhook = require('firebase-functions/v2/https').onRequest(
     console.error(e);
     res.status(500).send('webhook proxy error');
   }
+});
+
+
+/** Record important user activity server-side for the admin Activity Log. */
+exports.logUserActivity = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  const type = String(request.data?.type || '').trim();
+  if (!type) throw new HttpsError('invalid-argument', 'نوع العملية مطلوب');
+  await db.collection('activityLogs').add({
+    uid, type,
+    courseId: request.data?.courseId ? String(request.data.courseId) : null,
+    metadata: request.data?.metadata || {},
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  return { ok: true };
+});
+
+/** Send an immediate campaign to selected users and persist it in their inbox. */
+exports.sendNotificationCampaign = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  const me = await db.collection('users').doc(uid).get();
+  const adminUser = request.auth.token?.admin === true || me.data()?.isAdmin === true || me.data()?.role === 'admin';
+  if (!adminUser) throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
+  const title = String(request.data?.title || '').trim();
+  const body = String(request.data?.body || '').trim();
+  const imageUrl = String(request.data?.imageUrl || '').trim();
+  const targetUids = Array.isArray(request.data?.userIds) ? request.data.userIds.map(String).filter(Boolean) : [];
+  if (!title || !body || !targetUids.length) throw new HttpsError('invalid-argument', 'العنوان والنص والمستلمون مطلوبون');
+  let sent = 0;
+  for (const target of targetUids) {
+    await db.collection('users').doc(target).collection('notifications').add({ title, body, imageUrl, type: 'campaign', read: false, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    const tokenSnap = await db.collection('users').doc(target).collection('fcmTokens').get();
+    const tokens = tokenSnap.docs.map(d => d.data()?.token).filter(Boolean);
+    for (let i = 0; i < tokens.length; i += 500) {
+      const result = await admin.messaging().sendEachForMulticast({
+        tokens: tokens.slice(i, i + 500),
+        notification: { title, body, ...(imageUrl ? { imageUrl } : {}) },
+        data: { type: 'campaign' },
+      });
+      sent += result.successCount;
+    }
+  }
+  await db.collection('notificationCampaigns').add({ title, body, imageUrl, targetUids, sent, createdBy: uid, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  return { ok: true, sent };
+});
+
+/** Create a referral code for a user. */
+exports.ensureReferralCode = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  const ref = db.collection('users').doc(uid);
+  const snap = await ref.get();
+  const existing = snap.data()?.referralCode;
+  if (existing) return { code: String(existing) };
+  const code = `FAH-${uid.slice(0, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  await ref.set({ referralCode: code }, { merge: true });
+  return { code };
 });
