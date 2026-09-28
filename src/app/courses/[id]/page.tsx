@@ -38,8 +38,8 @@ import {
 import { ProtectedVideoPlayer } from "@/components/courses/protected-video-player";
 import { CoursePurchaseDialog } from "@/components/courses/course-purchase-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { useFirebase, useFirestore, useDoc, useMemoFirebase } from "@/firebase";
-import { doc } from "firebase/firestore";
+import { useFirebase, useFirestore, useDoc, useMemoFirebase, useCollection } from "@/firebase";
+import { doc, collection } from "firebase/firestore";
 
 export default function CourseDetailPage() {
   const params = useParams();
@@ -57,24 +57,15 @@ export default function CourseDetailPage() {
   const routeLessonNumber = lessonRouteMatch ? Number(lessonRouteMatch[1]) : 1;
   const courseId = lessonRouteMatch ? `course-${lessonRouteMatch[2]}` : rawCourseRoute;
 
-  // الدرس الأول يبقى على المنصة، والدرس 2 وما بعده يفتح تطبيق فهمت تلقائيًا.
-  useEffect(() => {
-    if (typeof window === "undefined" || !lessonRouteMatch || routeLessonNumber < 2) return;
-    const appLink = `fahmny://${rawCourseRoute}`;
-    const fallbackTimer = window.setTimeout(() => {
-      // إذا لم يكن التطبيق مثبتًا، نبقي المستخدم على صفحة الويب بدل كسر الصفحة.
-      if (document.visibilityState === "visible") {
-        console.info("تطبيق فهمت غير مفتوح؛ يمكنك فتح التطبيق من زر المحاضرة/الكورس.");
-      }
-    }, 1800);
-    window.location.href = appLink;
-    return () => window.clearTimeout(fallbackTimer);
-  }, [rawCourseRoute, routeLessonNumber, Boolean(lessonRouteMatch)]);
   const [course, setCourse] = useState<Course | null>(null);
   const [selectedLessonIndex, setSelectedLessonIndex] = useState(0);
   const [isEnrolled, setIsEnrolled] = useState(false);
   const [userEnrollment, setUserEnrollment] = useState<CourseEnrollment | null>(null);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
+  const instructorRef = useMemoFirebase(() => (firestore && course?.instructorId) ? doc(firestore, "users", course.instructorId) : null, [firestore, course?.instructorId]);
+  const { data: instructorProfile } = useDoc(instructorRef);
+  const followersQuery = useMemoFirebase(() => (firestore && course?.instructorId) ? collection(firestore, "users", course.instructorId, "followers") : null, [firestore, course?.instructorId]);
+  const { data: followers } = useCollection(followersQuery);
 
   const currentUserId = user?.uid || "guest-user";
   const currentUserName = profile?.name || user?.displayName || "مستفهم منصة فهمت";
@@ -96,6 +87,8 @@ export default function CourseDetailPage() {
   };
 
   const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isFollowing, setIsFollowing] = useState(false);
+  useEffect(() => { if (user?.uid && followers) setIsFollowing(followers.some((f:any) => f.id === user.uid)); }, [user?.uid, followers]);
 
   useEffect(() => {
     if (typeof window !== "undefined" && course?.instructorId) {
@@ -108,30 +101,17 @@ export default function CourseDetailPage() {
     }
   }, [course?.instructorId]);
 
-  const handleToggleSubscribe = () => {
-    if (!course?.instructorId) return;
+  const handleToggleSubscribe = async () => {
+    if (!course?.instructorId || !user || !firestore) return;
     try {
-      const subs = JSON.parse(localStorage.getItem("fahimt_subscribed_instructors") || "[]");
-      let updated: string[];
-      if (subs.includes(course.instructorId)) {
-        updated = subs.filter((id: string) => id !== course.instructorId);
-        setIsSubscribed(false);
-        toast({
-          title: "تم إيقاف الإشعارات",
-          description: `تم إيقاف إشعارات كورسات المُفهم ${course.instructorName}.`
-        });
+      const ref = doc(firestore, "users", course.instructorId, "followers", user.uid);
+      if (isFollowing) {
+        const { deleteDoc } = await import("firebase/firestore"); await deleteDoc(ref); setIsFollowing(false);
       } else {
-        updated = [...subs, course.instructorId];
-        setIsSubscribed(true);
-        toast({
-          title: "🔔 تم تفعيل الإشعارات بنجاح!",
-          description: `هتوصلك كل الكورسات والدروس الجديدة للمُفهم ${course.instructorName} أول ما تنزل.`
-        });
+        const { setDoc, serverTimestamp } = await import("firebase/firestore"); await setDoc(ref, { uid: user.uid, createdAt: serverTimestamp() }); setIsFollowing(true);
       }
-      localStorage.setItem("fahimt_subscribed_instructors", JSON.stringify(updated));
-    } catch (e) {
-      console.error(e);
-    }
+      setIsSubscribed(!isFollowing);
+    } catch (e) { toast({variant:"destructive", title:"تعذر تحديث المتابعة", description:"حاول مرة أخرى."}); }
   };
 
   useEffect(() => {
@@ -204,13 +184,6 @@ export default function CourseDetailPage() {
     const lesson = course.lessons[index];
     if (!lesson) return;
 
-    // الدرس الأول يبقى داخل المنصة. من الدرس 2 وما بعده يتحول إلى رابط التطبيق.
-    if (index >= 1) {
-      const numericCourseId = course.id.replace(/^course-/i, "");
-      window.location.href = `/courses/course${index + 1}-${numericCourseId}`;
-      return;
-    }
-
     const locked = isLessonLocked(index);
     if (locked) {
       toast({
@@ -265,6 +238,20 @@ export default function CourseDetailPage() {
             )}
           </div>
         </div>
+
+        {course.instructorId && (
+          <Card className="rounded-3xl border-2 border-primary/10 shadow-sm">
+            <CardContent className="p-6 flex flex-col md:flex-row items-center gap-5">
+              <Avatar className="h-20 w-20 border-4 border-white shadow-lg"><AvatarImage src={instructorProfile?.profilePictureUrl || ""}/><AvatarFallback>{course.instructorName?.charAt(0)}</AvatarFallback></Avatar>
+              <div className="flex-1 text-center md:text-right">
+                <div className="flex items-center justify-center md:justify-start gap-2"><h3 className="text-xl font-black">{course.instructorName}</h3><Star className="w-4 h-4 fill-yellow-400 text-yellow-400"/></div>
+                <p className="text-sm text-zinc-500 font-bold mt-1">{instructorProfile?.bio || "مُفهّم ناشر الكورس"}</p>
+                <div className="text-xs text-zinc-400 mt-2">{followers?.length || instructorProfile?.followersCount || 0} متابع • {instructorProfile?.followingCount || 0} يتابع • التقييم {Number(instructorProfile?.rating || 0).toFixed(1)}/5</div>
+              </div>
+              <Button onClick={handleToggleSubscribe} variant="outline" className="rounded-xl font-black">{isFollowing ? "متابَع" : "متابعة"}</Button>
+            </CardContent>
+          </Card>
+        )}
 
         {/* منطقة المحتوى: المشغل المحمي وقائمة الدروس */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

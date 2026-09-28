@@ -56,6 +56,7 @@ export function ProtectedVideoPlayer({
   const [watermarkSecondaryPos, setWatermarkSecondaryPos] = useState({ top: 70, left: 60 });
   const [currentTimeFormatted, setCurrentTimeFormatted] = useState("");
   const [resolvedSrc, setResolvedSrc] = useState(videoUrl);
+  const [playbackRate, setPlaybackRate] = useState(1);
 
   useEffect(() => {
     let isMounted = true;
@@ -222,6 +223,16 @@ export function ProtectedVideoPlayer({
     }
   };
 
+  const seekBy = (seconds: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = Math.max(0, Math.min(duration || 0, videoRef.current.currentTime + seconds));
+  };
+
+  const setSpeed = (rate: number) => {
+    setPlaybackRate(rate);
+    if (videoRef.current) videoRef.current.playbackRate = rate;
+  };
+
   const handleFullscreen = () => {
     if (!containerRef.current) return;
     if (!document.fullscreenElement) {
@@ -385,7 +396,7 @@ export function ProtectedVideoPlayer({
                 size="icon"
                 onClick={() => {
                   if (videoRef.current) {
-                    videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10);
+                    seekBy(-10);
                   }
                 }}
                 title="تراجع 10 ثوانٍ"
@@ -394,13 +405,16 @@ export function ProtectedVideoPlayer({
                 <RotateCcw className="w-4 h-4" />
               </Button>
 
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleFullscreen}
-                title="شاشة كاملة"
-                className="text-white hover:bg-white/20 h-8 w-8 rounded-lg"
-              >
+              <Button variant="ghost" size="icon" onClick={() => seekBy(10)} title="تقديم 10 ثوانٍ" className="text-white hover:bg-white/20 h-8 w-8 rounded-lg">
+                <span className="text-[10px] font-black">+10</span>
+              </Button>
+              <select value={playbackRate} onChange={(e)=>setSpeed(Number(e.target.value))} title="سرعة التشغيل" className="h-8 rounded-lg bg-black/50 border border-white/20 text-white text-xs px-2 outline-none">
+                {[0.5,0.75,1,1.25,1.5,2].map(v=><option key={v} value={v} className="text-black">{v}x</option>)}
+              </select>
+              <Button variant="ghost" size="icon" onClick={() => setSecurityAlert("جودة الفيديو الحالية هي جودة المصدر المتاحة للكورس.")} title="الجودة" className="text-white hover:bg-white/20 h-8 w-8 rounded-lg">
+                <span className="text-[9px] font-black">HD</span>
+              </Button>
+              <Button variant="ghost" size="icon" onClick={handleFullscreen} title="شاشة كاملة" className="text-white hover:bg-white/20 h-8 w-8 rounded-lg">
                 <Maximize className="w-4 h-4" />
               </Button>
             </div>
