@@ -1,6 +1,7 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { presignedUrl, putObject } = require('./r2');
 const R2_SECRETS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'];
@@ -653,4 +654,20 @@ exports.ensureReferralCode = onCall(async (request) => {
   const code = `FAH-${uid.slice(0, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
   await ref.set({ referralCode: code }, { merge: true });
   return { code };
+});
+
+/** Admin-only: write R2 manifests for every published course (run once for courses published before syncCourseManifest existed). */
+exports.backfillCourseManifests = onCall({ secrets: R2_SECRETS, timeoutSeconds: 540 }, async (request) => {
+  if (!(await isAdminRequest(request))) throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
+  const snap = await db.collection('courses').get();
+  let count = 0;
+  for (const c of snap.docs) {
+    const data = c.data();
+    if (data.status && data.status !== 'published' && data.isPublished !== true) continue;
+    const lessonsSnap = await c.ref.collection('lessons').orderBy('order').get();
+    const lessons = lessonsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    await putObject(`courses/${c.id}/manifest.json`, Buffer.from(JSON.stringify({ id: c.id, ...data, lessons })), 'application/json');
+    count++;
+  }
+  return { ok: true, count };
 });

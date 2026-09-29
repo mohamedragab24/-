@@ -59,7 +59,7 @@ export function CoursePurchaseDialog({
   const isAlreadyBought = isUserEnrolled(course.id, studentId);
   const isOwner = course.instructorId === studentId;
 
-  const handleConfirmPurchase = () => {
+  const handleConfirmPurchase = async () => {
     if (isAlreadyBought) {
       toast({
         variant: "destructive",
