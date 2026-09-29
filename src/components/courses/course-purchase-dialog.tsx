@@ -97,7 +97,15 @@ export function CoursePurchaseDialog({
     } catch (error: any) {
       console.error("purchaseCourse failed", error);
       setIsProcessing(false);
-      toast({ variant: "destructive", title: "تعذر إتمام الشراء", description: error?.message || "حاول مرة أخرى." });
+      const code = String(error?.code || "");
+      const generic = code.endsWith("/internal") || error?.message === "internal";
+      toast({
+        variant: "destructive",
+        title: "تعذر إتمام الشراء",
+        description: generic
+          ? "تعذر الاتصال بخدمة الشراء. تأكد من نشر دوال Firebase (purchaseCourse) ثم حاول مرة أخرى."
+          : error?.message || "حاول مرة أخرى.",
+      });
     }
   };
 
