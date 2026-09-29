@@ -1,4 +1,8 @@
 import { Course, CourseEnrollment } from "./types";
+import { doc, getDoc, getDocs, collection, orderBy, query, type Firestore } from "firebase/firestore";
+
+const R2_MANIFEST_BASE = "https://fahmny-r2.mohamedragabewiess.workers.dev";
+
 
 const INITIAL_COURSES: Course[] = [];
 
@@ -158,4 +162,58 @@ export function getEnrollmentsForInstructor(instructorId: string): { enrollment:
     enrollment: e,
     course: courses.find(c => c.id === e.courseId)!
   }));
+}
+
+
+function toCourse(id: string, d: any): Course {
+  const lessons = Array.isArray(d?.lessons) ? d.lessons : [];
+  return {
+    ...d,
+    id,
+    title: String(d?.title || d?.name || ""),
+    description: String(d?.description || ""),
+    coverUrl: String(d?.coverUrl || d?.thumbnailUrl || ""),
+    price: Number(d?.price || 0),
+    features: Array.isArray(d?.features) ? d.features : [],
+    lessons: lessons.map((l: any, i: number) => ({
+      ...l,
+      id: String(l?.id || l?.lessonId || i),
+      title: String(l?.title || ""),
+      videoUrl: String(l?.videoUrl || ""),
+      durationMinutes: Number(l?.durationMinutes || 0),
+      order: Number(l?.order ?? i + 1),
+      isFreePreview: l?.isFreePreview ?? l?.isPreview ?? false,
+    })),
+    instructorId: String(d?.instructorId || d?.ownerUid || ""),
+    instructorName: String(d?.instructorName || ""),
+    isPublished: d?.isPublished ?? d?.status === "published",
+    category: String(d?.category || ""),
+    createdAt: String(d?.createdAt?.toDate?.()?.toISOString?.() || d?.createdAt || new Date().toISOString()),
+  } as Course;
+}
+
+/**
+ * Courses used to live only in this browser's localStorage, which is tied to the
+ * domain. After a redeploy on a new domain it was empty -> "course not found".
+ * This loads the course from Firestore first, then from the R2 manifest.
+ */
+export async function fetchCourseRemote(id: string, firestore?: Firestore | null): Promise<Course | null> {
+  let found: Course | null = null;
+  if (firestore) {
+    try {
+      const snap = await getDoc(doc(firestore, "courses", id));
+      if (snap.exists()) {
+        const lessonsSnap = await getDocs(query(collection(firestore, "courses", id, "lessons"), orderBy("order")));
+        found = toCourse(id, { ...snap.data(), lessons: lessonsSnap.docs.map(l => ({ id: l.id, ...l.data() })) });
+      }
+    } catch (_) {}
+  }
+  if (!found) {
+    try {
+      const res = await fetch(`${R2_MANIFEST_BASE}/courses/${encodeURIComponent(id)}/manifest.json`, { cache: "no-store" });
+      if (res.ok) found = toCourse(id, await res.json());
+    } catch (_) {}
+  }
+  if (found) { try { upsertCourse(found); } catch (_) {} }
+  return found;
 }

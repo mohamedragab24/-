@@ -31,6 +31,7 @@ import { Progress } from "@/components/ui/progress";
 import { Course, CourseLesson, CourseEnrollment } from "@/lib/types";
 import { 
   getCourseById, 
+  fetchCourseRemote,
   isUserEnrolled, 
   getStoredEnrollments, 
   updateLessonProgress 
@@ -73,7 +74,8 @@ export default function CourseDetailPage() {
 
   const refreshCourseState = async () => {
     if (!courseId) return;
-    const found = getCourseById(courseId);
+    let found = getCourseById(courseId);
+    if (!found) found = (await fetchCourseRemote(courseId, firestore)) || undefined;
     setCourse(found || null);
     let enrolled = false;
     if (firestore && user?.uid) {
@@ -130,7 +132,7 @@ export default function CourseDetailPage() {
       window.removeEventListener("fahimt_courses_updated", handleUpdate);
       window.removeEventListener("fahimt_enrollments_updated", handleUpdate);
     };
-  }, [courseId]);
+  }, [courseId, firestore, user?.uid]);
 
   useEffect(() => {
     if (!course || routeLessonNumber < 1) return;
@@ -142,7 +144,8 @@ export default function CourseDetailPage() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center space-y-4 font-body" dir="rtl">
         <Layers className="w-16 h-16 text-zinc-300" />
-        <h2 className="text-2xl font-black text-zinc-800">الكورس غير موجود أو تم إخفاؤه</h2>
+        <h2 className="text-2xl font-black text-zinc-800">جاري تحميل الكورس…</h2>
+        <p className="text-zinc-500 text-sm">إذا استمرت هذه الرسالة، افتح الكورس من التطبيق: <a className="underline" href={`fahmny://course/${courseId}`}>فتح في التطبيق</a></p>
         <Button asChild className="bg-primary text-white rounded-xl">
           <Link href="/courses">العودة لدليل الكورسات</Link>
         </Button>
