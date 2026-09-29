@@ -1,9 +1,12 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const jwt = require('jsonwebtoken');
 const { presignedUrl, putObject } = require('./r2');
 const R2_SECRETS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'];
+const R2_PUBLIC_BASE = process.env.R2_PUBLIC_BASE_URL || 'https://fahmny-r2.mohamedragabewiess.workers.dev';
+const entitlementKey = (uid, courseId) => crypto.createHash('sha256').update(`${uid}:${courseId}`).digest('hex');
+const isAdminRequest = async (request) => { const uid = request.auth?.uid; if (!uid) return false; const me = await db.collection('users').doc(uid).get(); const p = me.data() || {}; return request.auth.token?.admin === true || p.isAdmin === true || p.role === 'admin'; };
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -22,69 +25,60 @@ const SIGNED_URL_TTL_MS = 10 * 60 * 1000; // 10 minutes
  */
 exports.getSignedVideoUrl = onCall({ secrets: R2_SECRETS }, async (request) => {
   const uid = request.auth?.uid;
-  if (!uid) {
-    throw new HttpsError("unauthenticated", "لازم تسجل الدخول أولاً");
-  }
-
+  if (!uid) throw new HttpsError("unauthenticated", "لازم تسجل الدخول أولاً");
   const { courseId, lessonId } = request.data || {};
-  if (!courseId || !lessonId) {
-    throw new HttpsError("invalid-argument", "بيانات الدرس غير مكتملة");
+  if (!courseId || !lessonId) throw new HttpsError("invalid-argument", "بيانات الدرس غير مكتملة");
+
+  let lesson = null;
+  try {
+    const snap = await db.collection("courses").doc(courseId).collection("lessons").doc(lessonId).get();
+    if (snap.exists) lesson = snap.data() || {};
+  } catch (_) {}
+  if (!lesson) {
+    try {
+      const response = await fetch(`${R2_PUBLIC_BASE}/courses/${encodeURIComponent(courseId)}/manifest.json`);
+      if (response.ok) {
+        const manifest = await response.json();
+        lesson = Array.isArray(manifest.lessons) ? manifest.lessons.find(x => String(x.id || x.lessonId) === String(lessonId)) : null;
+      }
+    } catch (_) {}
   }
+  if (!lesson) throw new HttpsError("not-found", "الدرس غير موجود");
 
-  const lessonDoc = await db
-    .collection("courses").doc(courseId)
-    .collection("lessons").doc(lessonId)
-    .get();
-
-  if (!lessonDoc.exists) {
-    throw new HttpsError("not-found", "الدرس غير موجود");
-  }
-  const lesson = lessonDoc.data();
-
-  // Preview lessons (e.g. the intro) are playable without a purchase.
-  if (!lesson.isPreview) {
-    const purchaseDoc = await db.collection("purchases").doc(`${uid}_${courseId}`).get();
-    const purchased = purchaseDoc.exists && purchaseDoc.data().status === "completed";
+  let purchased = false;
+  if (lesson.isPreview === true) {
+    purchased = true;
+  } else {
+    try {
+      const purchaseDoc = await db.collection("purchases").doc(`${uid}_${courseId}`).get();
+      purchased = purchaseDoc.exists && purchaseDoc.data()?.status === "completed";
+    } catch (_) {}
     if (!purchased) {
-      throw new HttpsError("permission-denied", "لازم تشتري الكورس الأول");
+      try {
+        const response = await fetch(`${R2_PUBLIC_BASE}/entitlements/${entitlementKey(uid, courseId)}.json`);
+        if (response.ok) {
+          const entitlement = await response.json();
+          purchased = entitlement?.status === 'completed' && String(entitlement?.uid || '') === uid && String(entitlement?.courseId || '') === courseId;
+        }
+      } catch (_) {}
     }
+    if (!purchased) throw new HttpsError("permission-denied", "لازم تشتري الكورس الأول");
   }
 
-  if (!lesson.storagePath) {
-    throw new HttpsError("failed-precondition", "ملف الفيديو غير متاح حاليًا");
-  }
-
+  const r2Key = String(lesson.r2Key || '');
+  if (!r2Key && !lesson.storagePath) throw new HttpsError("failed-precondition", "ملف الفيديو غير متاح حاليًا");
   let url;
   let expiresAtMs = Date.now() + SIGNED_URL_TTL_MS;
-  if (lesson.r2Key) {
-    const signed = presignedUrl({ method: 'GET', key: String(lesson.r2Key), expiresSeconds: Math.floor(SIGNED_URL_TTL_MS / 1000) });
-    url = signed.url;
-    expiresAtMs = signed.expiresAtMs;
-  } else if (lesson.storagePath) {
-    const [legacyUrl] = await bucket.file(lesson.storagePath).getSignedUrl({
-      version: "v4",
-      action: "read",
-      expires: Date.now() + SIGNED_URL_TTL_MS,
-    });
-    url = legacyUrl;
+  if (r2Key) {
+    const signed = presignedUrl({ method: 'GET', key: r2Key, expiresSeconds: Math.floor(SIGNED_URL_TTL_MS / 1000) });
+    url = signed.url; expiresAtMs = signed.expiresAtMs;
   } else {
-    throw new HttpsError("failed-precondition", "ملف الفيديو غير متاح حاليًا");
+    const [legacyUrl] = await bucket.file(lesson.storagePath).getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + SIGNED_URL_TTL_MS });
+    url = legacyUrl;
   }
-
-  // Optional: record a session so "مراقبة الجلسات" (session monitoring)
-  // from the spec has something to look at, and so you can rate-limit or
-  // revoke abusive accounts later.
-  await db.collection("sessions").add({
-    uid,
-    courseId,
-    lessonId,
-    issuedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
+  await db.collection("sessions").add({ uid, courseId, lessonId, issuedAt: admin.firestore.FieldValue.serverTimestamp() });
   return { url, expiresAtMs };
 });
-
-
 
 /** Create a short-lived R2 PUT URL. The browser uploads the file directly to R2;
  * no R2 secret is ever sent to the browser. */
@@ -174,6 +168,24 @@ exports.onUserProfileUpdated = onDocumentUpdated("users/{userId}", async (event)
   await batch.commit();
 });
 
+async function sendPurchaseNotification(uid, courseId, course) {
+  const title = 'تم تأكيد شراء الكورس';
+  const body = `تم تفعيل ${String(course.title || 'الكورس')} في حسابك ويمكنك بدء المشاهدة الآن.`;
+  const imageUrl = String(course.thumbnailUrl || course.coverUrl || '');
+  const notificationId = `purchase_${courseId}_${Date.now()}`;
+  await db.collection('users').doc(uid).collection('notifications').doc(notificationId).set({ title, body, imageUrl, type: 'purchase_completed', courseId, read: false, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const tokensSnap = await db.collection('users').doc(uid).collection('fcmTokens').get();
+  const tokens = tokensSnap.docs.map(d => d.data()?.token).filter(Boolean);
+  if (!tokens.length) return;
+  for (let i = 0; i < tokens.length; i += 500) {
+    await admin.messaging().sendEachForMulticast({
+      tokens: tokens.slice(i, i + 500),
+      notification: { title, body, ...(imageUrl ? { imageUrl } : {}) },
+      data: { type: 'purchase_completed', courseId: String(courseId), notificationId }
+    });
+  }
+}
+
 /** Securely create a pending payment request for the current user. The actual purchase is completed only by the payment webhook. */
 exports.purchaseCourse = onCall(async (request) => {
   const uid = request.auth?.uid;
@@ -186,15 +198,64 @@ exports.purchaseCourse = onCall(async (request) => {
   if (course.status && course.status !== 'published' && course.isPublished !== true) {
     throw new HttpsError('failed-precondition', 'الكورس غير منشور');
   }
-  const existing = await db.collection('purchases').doc(`${uid}_${courseId}`).get();
+
+  const purchaseRef = db.collection('purchases').doc(`${uid}_${courseId}`);
+  const existing = await purchaseRef.get();
   if (existing.exists && existing.data()?.status === 'completed') {
     return { ok: true, alreadyPurchased: true, amountPaid: Number(existing.data()?.amountPaid || course.price || 0) };
   }
-  const paymentRef = await db.collection('payments').add({
-    uid, courseId, amount: Number(course.price || 0), status: 'pending',
-    source: 'app', createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-  return { ok: true, paymentId: paymentRef.id, amountPaid: Number(course.price || 0) };
+
+  // Current platform checkout is an application-level checkout. The authoritative
+  // entitlement is created server-side here. When a real payment gateway is
+  // connected, this branch should instead create a pending payment and let its
+  // verified webhook call completePurchaseEntitlement().
+  const amountPaid = Number(course.price || 0);
+  const paymentRef = db.collection('payments').doc();
+  const batch = db.batch();
+  batch.set(paymentRef, { uid, courseId, amount: amountPaid, status: 'completed', source: 'platform_checkout', createdAt: admin.firestore.FieldValue.serverTimestamp(), completedAt: admin.firestore.FieldValue.serverTimestamp() });
+  batch.set(purchaseRef, { uid, courseId, status: 'completed', amountPaid, paymentId: paymentRef.id, source: String(request.data?.source || 'web'), purchasedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await batch.commit();
+
+  await sendPurchaseNotification(uid, courseId, course);
+  return { ok: true, alreadyPurchased: false, paymentId: paymentRef.id, amountPaid };
+});
+
+/** Firebase-first purchase check with R2 disaster-recovery fallback. */
+exports.checkCourseAccess = onCall({ secrets: R2_SECRETS }, async (request) => {
+  const uid = request.auth?.uid;
+  const courseId = String(request.data?.courseId || '').trim();
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  if (!courseId) throw new HttpsError('invalid-argument', 'courseId مطلوب');
+  try {
+    const snap = await db.collection('purchases').doc(`${uid}_${courseId}`).get();
+    if (snap.exists) return { purchased: snap.data()?.status === 'completed', source: 'firebase' };
+  } catch (_) {}
+  try {
+    const response = await fetch(`${R2_PUBLIC_BASE}/entitlements/${entitlementKey(uid, courseId)}.json`);
+    if (response.ok) {
+      const entitlement = await response.json();
+      if (String(entitlement.uid) === uid && String(entitlement.courseId) === courseId) {
+        return { purchased: entitlement.status === 'completed', source: 'r2' };
+      }
+    }
+  } catch (_) {}
+  return { purchased: false, source: 'none' };
+});
+
+/** Returns purchased course IDs; falls back to the R2 entitlement index. */
+exports.getMyPurchasedCourseIds = onCall({ secrets: R2_SECRETS }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  try {
+    const snap = await db.collection('purchases').where('uid', '==', uid).where('status', '==', 'completed').get();
+    const ids = snap.docs.map(d => String(d.data()?.courseId || '')).filter(Boolean);
+    if (ids.length) return { courseIds: [...new Set(ids)], source: 'firebase' };
+  } catch (_) {}
+  try {
+    const response = await fetch(`${R2_PUBLIC_BASE}/users/${entitlementKey(uid, 'index')}.json`);
+    if (response.ok) { const data = await response.json(); if (Array.isArray(data.courseIds)) return { courseIds: data.courseIds.map(String), source: 'r2' }; }
+  } catch (_) {}
+  return { courseIds: [], source: 'none' };
 });
 
 /**
@@ -206,9 +267,10 @@ exports.purchaseCourse = onCall(async (request) => {
  * a purchase — this must happen server-side, driven by your real
  * payment webhook writing into `payments`).
  */
-exports.onPaymentCompleted = onDocumentCreated("payments/{paymentId}", async (event) => {
-  const payment = event.data?.data();
-  if (!payment || payment.status !== "completed") return;
+exports.onPaymentCompleted = onDocumentWritten("payments/{paymentId}", async (event) => {
+  const before = event.data?.before?.data() || {};
+  const payment = event.data?.after?.data();
+  if (!payment || payment.status !== "completed" || before.status === "completed") return;
 
   await db.collection("purchases").doc(`${payment.uid}_${payment.courseId}`).set({
     uid: payment.uid,
@@ -218,6 +280,7 @@ exports.onPaymentCompleted = onDocumentCreated("payments/{paymentId}", async (ev
     paymentId: event.params.paymentId,
   });
 
+  if (payment.source === 'platform_checkout') return;
   const courseSnap = await db.collection('courses').doc(payment.courseId).get();
   const courseTitle = courseSnap.data()?.title || 'الكورس';
   await db.collection('users').doc(payment.uid).collection('notifications').doc(`purchase_${event.params.paymentId}`).set({
@@ -238,6 +301,34 @@ exports.onPaymentCompleted = onDocumentCreated("payments/{paymentId}", async (ev
       });
     }
   }
+});
+
+/** Mirror published course metadata and lesson R2 keys to a public, non-sensitive R2 manifest. */
+exports.syncCourseManifest = onDocumentWritten({ document: 'courses/{courseId}', secrets: R2_SECRETS }, async (event) => {
+  const after = event.data?.after?.data();
+  if (!after || (after.status && after.status !== 'published' && after.isPublished !== true)) return;
+  const courseId = event.params.courseId;
+  const lessonsSnap = await db.collection('courses').doc(courseId).collection('lessons').orderBy('order').get();
+  const lessons = lessonsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const manifest = { id: courseId, ...after, lessons };
+  await putObject(`courses/${courseId}/manifest.json`, Buffer.from(JSON.stringify(manifest)), 'application/json');
+});
+
+/** Mirror entitlements to R2 only as a disaster-recovery fallback for the server. */
+exports.syncPurchaseEntitlement = onDocumentWritten({ document: 'purchases/{purchaseId}', secrets: R2_SECRETS }, async (event) => {
+  const purchase = event.data?.after?.data();
+  if (!purchase?.uid || !purchase?.courseId) return;
+  const payload = { uid: String(purchase.uid), courseId: String(purchase.courseId), status: String(purchase.status || ''), updatedAt: new Date().toISOString() };
+  await putObject(`entitlements/${entitlementKey(String(purchase.uid), String(purchase.courseId))}.json`, Buffer.from(JSON.stringify(payload)), 'application/json');
+});
+
+/** Keep a recovery index of purchased course IDs for the signed-in user. */
+exports.syncPurchaseIndex = onDocumentWritten({ document: 'purchases/{purchaseId}', secrets: R2_SECRETS }, async (event) => {
+  const purchase = event.data?.after?.data();
+  if (!purchase?.uid || !purchase?.courseId) return;
+  const snap = await db.collection('purchases').where('uid', '==', String(purchase.uid)).where('status', '==', 'completed').get();
+  const courseIds = snap.docs.map(d => String(d.data()?.courseId || '')).filter(Boolean);
+  await putObject(`users/${entitlementKey(String(purchase.uid), 'index')}.json`, Buffer.from(JSON.stringify({ uid: String(purchase.uid), courseIds: [...new Set(courseIds)], updatedAt: new Date().toISOString() })), 'application/json');
 });
 
 /**
@@ -320,18 +411,21 @@ exports.reviewCourse = onCall(async (request) => {
 });
 
 /** Create an admin account from the in-app admin panel. */
-exports.createAdminAccount = onCall(async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
-  const me = await db.collection('users').doc(uid).get();
-  const isAdmin = request.auth.token?.admin === true || me.data()?.isAdmin === true || me.data()?.role === 'admin';
-  if (!isAdmin) throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
-  const { email, password, name } = request.data || {};
-  if (!email || !password || String(password).length < 8) throw new HttpsError('invalid-argument', 'البريد وكلمة المرور غير صحيحة');
-  const created = await admin.auth().createUser({ email: String(email).trim(), password: String(password), displayName: String(name || '').trim() });
-  await db.collection('users').doc(created.uid).set({ uid: created.uid, email: created.email, name: String(name || ''), role: 'admin', isAdmin: true, mode: 'mostafhem', createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  await admin.auth().setCustomUserClaims(created.uid, { admin: true });
-  return { uid: created.uid };
+exports.grantAdmin = onCall(async (request) => {
+  if (!(await isAdminRequest(request))) throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
+  const identifier = String(request.data?.identifier || '').trim();
+  const type = String(request.data?.type || 'auto').trim();
+  if (!identifier) throw new HttpsError('invalid-argument', 'أدخل UID أو البريد أو رقم الهاتف');
+  let target;
+  try {
+    if (type === 'uid' || (type === 'auto' && !identifier.includes('@') && !/^\+?\d{8,15}$/.test(identifier))) target = await admin.auth().getUser(identifier);
+    else if (type === 'phone' || (type === 'auto' && /^\+?\d{8,15}$/.test(identifier))) target = await admin.auth().getUserByPhoneNumber(identifier);
+    else target = await admin.auth().getUserByEmail(identifier.toLowerCase());
+  } catch (_) { throw new HttpsError('not-found', 'الحساب غير موجود في Firebase Authentication'); }
+  await admin.auth().setCustomUserClaims(target.uid, { ...(target.customClaims || {}), admin: true });
+  await db.collection('users').doc(target.uid).set({ uid: target.uid, email: target.email || '', phoneNumber: target.phoneNumber || '', isAdmin: true, role: 'admin', adminGrantedAt: admin.firestore.FieldValue.serverTimestamp(), adminGrantedBy: request.auth.uid }, { merge: true });
+  await db.collection('adminLogs').add({ action: 'grant_admin', targetUserId: target.uid, identifier, grantedBy: request.auth.uid, timestamp: admin.firestore.FieldValue.serverTimestamp() });
+  return { ok: true, uid: target.uid };
 });
 
 /** Temporarily block a user and disable Firebase Authentication. */

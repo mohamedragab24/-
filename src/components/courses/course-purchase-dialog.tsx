@@ -21,7 +21,9 @@ import {
   ArrowLeft
 } from "lucide-react";
 import { Course } from "@/lib/types";
-import { enrollStudent, isUserEnrolled } from "@/lib/courses-data";
+import { isUserEnrolled } from "@/lib/courses-data";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { initializeFirebase } from "@/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
 
@@ -77,29 +79,26 @@ export function CoursePurchaseDialog({
     }
 
     setIsProcessing(true);
-
-    setTimeout(() => {
-      enrollStudent(
-        course.id,
-        studentId,
-        studentName,
-        studentEmail,
-        course.price
-      );
+    try {
+      const { firebaseApp } = initializeFirebase();
+      const functions = getFunctions(firebaseApp, "us-central1");
+      const purchaseCourse = httpsCallable(functions, "purchaseCourse");
+      const result: any = await purchaseCourse({ courseId: course.id, source: "web" });
+      if (!result.data?.ok) throw new Error("purchase_failed");
 
       setIsProcessing(false);
       toast({
-        title: "تم الاشتراك في الكورس بنجاح!",
-        description: "تم تفعيل الكورس في حسابك، يمكنك البدء في المشاهدة المحمية الآن فوراً."
+        title: "تم شراء الكورس بنجاح!",
+        description: "تم تسجيل الشراء في Firebase ويمكنك الآن الوصول إليه من التطبيق."
       });
-
       onOpenChange(false);
-      if (onPurchaseSuccess) {
-        onPurchaseSuccess();
-      } else {
-        router.push(`/courses/${course.id}`);
-      }
-    }, 1200);
+      if (onPurchaseSuccess) onPurchaseSuccess();
+      else router.push(`/courses/${course.id}`);
+    } catch (error: any) {
+      console.error("purchaseCourse failed", error);
+      setIsProcessing(false);
+      toast({ variant: "destructive", title: "تعذر إتمام الشراء", description: error?.message || "حاول مرة أخرى." });
+    }
   };
 
   return (

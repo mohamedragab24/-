@@ -26,9 +26,8 @@ export default function AdminAccountManagement() {
   const [isSearching, setIsSearching] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [targetUser, setTargetUser] = useState<any>(null);
-  const [adminName, setAdminName] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
+  const [adminIdentifier, setAdminIdentifier] = useState("");
+  const [adminType, setAdminType] = useState<"auto"|"uid"|"email"|"phone">("auto");
   const [creatingAdmin, setCreatingAdmin] = useState(false);
 
   const handleSearch = async () => {
@@ -147,13 +146,15 @@ export default function AdminAccountManagement() {
           </div>
 
           <div className="p-8 bg-zinc-50 rounded-[2.5rem] border-2 border-dashed space-y-5">
-            <h3 className="text-2xl font-black flex items-center gap-2 justify-end"><ShieldCheck className="text-primary"/> إنشاء حساب أدمن</h3>
+            <h3 className="text-2xl font-black flex items-center gap-2 justify-end"><ShieldCheck className="text-primary"/> إضافة أدمن لحساب موجود</h3>
+            <p className="text-sm text-muted-foreground font-bold text-right">لا يتم إنشاء حساب جديد ولا يتم طلب اسم أو كلمة مرور. استخدم UID أو البريد الإلكتروني أو رقم الهاتف لحساب موجود في Firebase Authentication.</p>
             <div className="grid md:grid-cols-3 gap-4">
-              <Input placeholder="الاسم" value={adminName} onChange={e=>setAdminName(e.target.value)} />
-              <Input placeholder="البريد الإلكتروني" type="email" value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} />
-              <Input placeholder="كلمة المرور (8+ أحرف)" type="password" value={adminPassword} onChange={e=>setAdminPassword(e.target.value)} />
+              <select className="h-12 rounded-xl border px-3 bg-white" value={adminType} onChange={e=>setAdminType(e.target.value as any)}>
+                <option value="auto">تحديد تلقائي</option><option value="uid">UID</option><option value="email">البريد الإلكتروني</option><option value="phone">رقم الهاتف</option>
+              </select>
+              <Input className="md:col-span-2" placeholder="UID أو البريد أو رقم الهاتف" value={adminIdentifier} onChange={e=>setAdminIdentifier(e.target.value)} />
             </div>
-            <Button disabled={creatingAdmin} className="w-full h-14 rounded-2xl font-black" onClick={async()=>{if(!adminEmail||adminPassword.length<8)return;setCreatingAdmin(true);try{await httpsCallable(getFunctions(getApp(),'us-central1'),'createAdminAccount')({email:adminEmail,password:adminPassword,name:adminName});toast({title:'تم إنشاء حساب الأدمن'});setAdminName('');setAdminEmail('');setAdminPassword('');}catch(e:any){toast({variant:'destructive',title:'تعذر إنشاء الأدمن',description:e?.message||'خطأ'});}finally{setCreatingAdmin(false);}}}>{creatingAdmin?<Loader2 className="animate-spin"/>:<Key/>} إنشاء حساب أدمن</Button>
+            <Button disabled={creatingAdmin || !adminIdentifier.trim()} className="w-full h-14 rounded-2xl font-black" onClick={async()=>{setCreatingAdmin(true);try{const result=await httpsCallable(getFunctions(getApp(),'us-central1'),'grantAdmin')({identifier:adminIdentifier.trim(),type:adminType});toast({title:'تمت إضافة صلاحية الأدمن',description:`UID: ${(result.data as any)?.uid || ''}`});setAdminIdentifier('');}catch(e:any){toast({variant:'destructive',title:'تعذر إضافة الأدمن',description:e?.message||'خطأ'});}finally{setCreatingAdmin(false);}}}>{creatingAdmin?<Loader2 className="animate-spin"/>:<Key/>} إضافة صلاحية أدمن</Button>
           </div>
 
           {targetUser && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CalendarClock, ImagePlus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,13 +11,16 @@ import { useToast } from "@/hooks/use-toast";
 import { useFirebase } from "@/firebase";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 
 export default function AdminNotifications(){
  const { toast } = useToast();
- const { firebaseApp, storage } = useFirebase();
+ const { firebaseApp, storage, firestore } = useFirebase();
  const [loading,setLoading]=useState(false);
  const [uploading,setUploading]=useState(false);
  const [f,setF]=useState({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:""});
+ const [history,setHistory]=useState<any[]>([]);
+ useEffect(()=>{ if(!firestore) return; const q=query(collection(firestore,"scheduledNotifications"),orderBy("createdAt","desc"),limit(100)); return onSnapshot(q,s=>setHistory(s.docs.map(d=>({id:d.id,...d.data()})))); },[firestore]);
  const uploadImage=async(file:File)=>{
    if(!storage) throw new Error('خدمة التخزين غير متاحة');
    setUploading(true);
@@ -49,5 +52,15 @@ export default function AdminNotifications(){
     <div className="space-y-3"><Label>صورة الإشعار</Label><div className="flex items-center gap-3"><label className="inline-flex items-center gap-2 rounded-xl border px-4 py-3 font-bold cursor-pointer hover:bg-zinc-50"><ImagePlus className="w-5 h-5"/> رفع صورة من الجهاز<input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e=>{const file=e.target.files?.[0]; if(file) uploadImage(file).catch(err=>toast({variant:'destructive',title:'فشل رفع الصورة',description:err?.message||'تعذر الرفع'}));}}/></label>{uploading&&<Loader2 className="animate-spin"/>}</div>{f.imageUrl&&<img src={f.imageUrl} alt="صورة الإشعار" className="h-28 w-48 object-cover rounded-xl border"/>}</div>
     <div><Label>وقت الإرسال</Label><Input type="datetime-local" value={f.sendAt} onChange={e=>setF({...f,sendAt:e.target.value})}/></div>
     <Button disabled={loading||uploading} onClick={submit} className="h-16 w-full rounded-2xl font-black text-xl">{loading?<Loader2 className="animate-spin"/>:<CalendarClock/>} جدولة الإشعار</Button>
-   </CardContent></Card></div>;
+   </CardContent></Card>
+   <Card className="rounded-[2.5rem] shadow-xl">
+    <CardHeader><CardTitle>سجل الإشعارات والحملات السابقة</CardTitle></CardHeader>
+    <CardContent>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm text-right"><thead><tr className="border-b"><th className="p-3">الحملة</th><th className="p-3">العنوان</th><th className="p-3">الموعد</th><th className="p-3">الحالة</th><th className="p-3">تم الإرسال</th></tr></thead>
+        <tbody>{history.length===0 ? <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">لا توجد حملات بعد</td></tr> : history.map(n=><tr key={n.id} className="border-b"><td className="p-3 font-bold">{n.campaign||'—'}</td><td className="p-3">{n.title||'—'}</td><td className="p-3">{n.sendAt?.toDate ? n.sendAt.toDate().toLocaleString('ar-EG') : '—'}</td><td className="p-3">{n.status==='sent'?'تم الإرسال':n.status==='processing'?'جارٍ الإرسال':n.status==='pending'?'مجدولة':n.status||'—'}</td><td className="p-3">{typeof n.sentCount==='number'?n.sentCount:'—'}</td></tr>)}</tbody></table>
+      </div>
+    </CardContent>
+   </Card>
+ </div>;
 }
