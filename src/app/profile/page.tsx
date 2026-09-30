@@ -140,6 +140,9 @@ export default function ProfilePage() {
                   {profile?.isVerified && <ShieldCheck className="h-6 w-6 text-blue-500" />}
                 </h2>
                 <Badge variant="outline" className="mt-2 text-primary font-bold">{profile?.role === 'mufhem' ? 'مُفهم' : 'مُستفهم'}</Badge>
+                {profile?.publicId && (
+                  <p className="mt-3 text-sm font-black text-zinc-500">الرقم التعريفي: <span className="font-mono tracking-[0.25em] text-zinc-900 bg-zinc-100 rounded-lg px-3 py-1 select-all" dir="ltr">{profile.publicId}</span></p>
+                )}
               </div>
             </div>
 

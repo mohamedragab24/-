@@ -52,6 +52,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { label: "كافة الاستفهامات", href: "/admin/all-requests", icon: ClipboardList },
         { label: "الطلبات المكتملة", href: "/admin/completed-orders", icon: CheckCircle2 },
         { label: "مراجعة المحاضرات", href: "/admin/sessions", icon: Video },
+        { label: "المجموعات والفواتير", href: "/admin/groups", icon: Users },
         { label: "الإشعارات والحملات", href: "/admin/notifications", icon: Bell },
         { label: "المحادثات المباشرة", href: "/admin/direct-chats", icon: MessageSquare },
         { label: "مراجعة معرض الأعمال", href: "/admin/portfolio-approvals", icon: ImageIcon },

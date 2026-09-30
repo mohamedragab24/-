@@ -77,6 +77,12 @@ export default {
     const key = url.pathname.replace(/^\/+/, "");
     if (!key) return json({ success: false, error: "missing key" }, 400);
 
+    // محتوى المجموعات خاص: لا يُقرأ ولا يُرفع ولا يُحذف عبر الـ Worker.
+    // الرفع والمشاهدة عبر روابط مؤقتة موقّعة من Cloud Functions فقط.
+    if (key.startsWith("groups/")) {
+      return json({ success: false, error: "private" }, 403);
+    }
+
     // Upload course cover/video or any other authorized R2 object.
     if (request.method === "PUT") {
       await env.R2_BUCKET.put(key, request.body, {

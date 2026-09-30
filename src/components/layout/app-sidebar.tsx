@@ -161,6 +161,7 @@ export function AppSidebar() {
             <NavItem href="/offers" icon={Zap} label="عروضي" />
             <NavItem href="/requests" icon={ClipboardList} label="استفهاماتي" />
             <NavItem href="/sessions" icon={History} label="جلساتي" />
+            <NavItem href="/groups" icon={Users} label="المجموعات" />
             
             <SidebarSeparator className="my-4" />
             
