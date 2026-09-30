@@ -18,7 +18,7 @@ export default function AdminNotifications(){
  const { firebaseApp, storage, firestore } = useFirebase();
  const [loading,setLoading]=useState(false);
  const [uploading,setUploading]=useState(false);
- const [f,setF]=useState({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:""});
+ const [f,setF]=useState({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:"",deliveryMode:"both"});
  const [history,setHistory]=useState<any[]>([]);
  useEffect(()=>{ if(!firestore) return; const q=query(collection(firestore,"scheduledNotifications"),orderBy("createdAt","desc"),limit(100)); return onSnapshot(q,s=>setHistory(s.docs.map(d=>({id:d.id,...d.data()})))); },[firestore]);
  const uploadImage=async(file:File)=>{
@@ -40,7 +40,7 @@ export default function AdminNotifications(){
      const fn=httpsCallable(getFunctions(firebaseApp,'us-central1'),'scheduleNotification');
      await fn({...f,audience:'all',sendAt:new Date(f.sendAt).toISOString()});
      toast({title:"تمت جدولة الإشعار",description:"سيظهر داخل التطبيق وسيصل Push للأجهزة المسجلة."});
-     setF({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:""});
+     setF({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:"",deliveryMode:"both"});
    } catch(e:any) { toast({variant:"destructive",title:"تعذر الجدولة",description:e?.message||"حدث خطأ"}); } finally { setLoading(false); }
  };
  return <div className="p-6 md:p-10 space-y-8 max-w-4xl mx-auto" dir="rtl">
@@ -51,14 +51,15 @@ export default function AdminNotifications(){
     <div><Label>الوصف</Label><Textarea value={f.description} onChange={e=>setF({...f,description:e.target.value})}/></div>
     <div className="space-y-3"><Label>صورة الإشعار</Label><div className="flex items-center gap-3"><label className="inline-flex items-center gap-2 rounded-xl border px-4 py-3 font-bold cursor-pointer hover:bg-zinc-50"><ImagePlus className="w-5 h-5"/> رفع صورة من الجهاز<input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e=>{const file=e.target.files?.[0]; if(file) uploadImage(file).catch(err=>toast({variant:'destructive',title:'فشل رفع الصورة',description:err?.message||'تعذر الرفع'}));}}/></label>{uploading&&<Loader2 className="animate-spin"/>}</div>{f.imageUrl&&<img src={f.imageUrl} alt="صورة الإشعار" className="h-28 w-48 object-cover rounded-xl border"/>}</div>
     <div><Label>وقت الإرسال</Label><Input type="datetime-local" value={f.sendAt} onChange={e=>setF({...f,sendAt:e.target.value})}/></div>
+    <div><Label>مكان ظهور الرسالة</Label><select value={f.deliveryMode} onChange={e=>setF({...f,deliveryMode:e.target.value})} className="w-full rounded-xl border bg-background px-3 py-3"><option value="both">داخل التطبيق وخارجه (إشعار Push)</option><option value="in_app">داخل التطبيق فقط</option><option value="push">خارج التطبيق فقط (Push)</option></select></div>
     <Button disabled={loading||uploading} onClick={submit} className="h-16 w-full rounded-2xl font-black text-xl">{loading?<Loader2 className="animate-spin"/>:<CalendarClock/>} جدولة الإشعار</Button>
    </CardContent></Card>
    <Card className="rounded-[2.5rem] shadow-xl">
     <CardHeader><CardTitle>سجل الإشعارات والحملات السابقة</CardTitle></CardHeader>
     <CardContent>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm text-right"><thead><tr className="border-b"><th className="p-3">الحملة</th><th className="p-3">العنوان</th><th className="p-3">الموعد</th><th className="p-3">الحالة</th><th className="p-3">تم الإرسال</th></tr></thead>
-        <tbody>{history.length===0 ? <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">لا توجد حملات بعد</td></tr> : history.map(n=><tr key={n.id} className="border-b"><td className="p-3 font-bold">{n.campaign||'—'}</td><td className="p-3">{n.title||'—'}</td><td className="p-3">{n.sendAt?.toDate ? n.sendAt.toDate().toLocaleString('ar-EG') : '—'}</td><td className="p-3">{n.status==='sent'?'تم الإرسال':n.status==='processing'?'جارٍ الإرسال':n.status==='pending'?'مجدولة':n.status||'—'}</td><td className="p-3">{typeof n.sentCount==='number'?n.sentCount:'—'}</td></tr>)}</tbody></table>
+        <table className="w-full text-sm text-right"><thead><tr className="border-b"><th className="p-3">الحملة</th><th className="p-3">العنوان</th><th className="p-3">الموعد</th><th className="p-3">الحالة</th><th className="p-3">القناة</th><th className="p-3">تم الإرسال</th><th className="p-3">فشل</th><th className="p-3">آخر خطأ</th></tr></thead>
+        <tbody>{history.length===0 ? <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">لا توجد حملات بعد</td></tr> : history.map(n=><tr key={n.id} className="border-b"><td className="p-3 font-bold">{n.campaign||'—'}</td><td className="p-3">{n.title||'—'}</td><td className="p-3">{n.sendAt?.toDate ? n.sendAt.toDate().toLocaleString('ar-EG') : '—'}</td><td className="p-3">{n.status==='sent'?'تم الإرسال':n.status==='processing'?'جارٍ الإرسال':n.status==='pending'?'مجدولة':n.status==='partial'?'وصل جزئيًا':n.status==='failed'?'فشل الإرسال':n.status||'—'}</td><td className="p-3">{n.deliveryMode==='in_app'?'داخل التطبيق':n.deliveryMode==='push'?'Push فقط':'التطبيق + Push'}</td><td className="p-3">{typeof n.sentCount==='number'?n.sentCount:'—'}</td><td className="p-3">{typeof n.failedCount==='number'?n.failedCount:'—'}</td><td className="p-3 max-w-40 truncate" title={n.lastError||''}>{n.lastError||'—'}</td></tr>)}</tbody></table>
       </div>
     </CardContent>
    </Card>

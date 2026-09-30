@@ -52,13 +52,14 @@ export default function CourseDetailPage() {
   const userRef = useMemoFirebase(() => (firestore && user) ? doc(firestore, "users", user.uid) : null, [firestore, user]);
   const { data: profile } = useDoc(userRef);
 
-  const rawCourseRoute = params?.id as string;
+  const rawCourseRoute = Array.isArray(params?.id) ? String(params.id[0] || "") : String(params?.id || "");
   // روابط الدروس: /courses/course1-COURSE_ID ، /courses/course2-COURSE_ID ...
   const lessonRouteMatch = rawCourseRoute?.match(/^course(\d+)-(.+)$/i);
   const routeLessonNumber = lessonRouteMatch ? Number(lessonRouteMatch[1]) : 1;
   const courseId = lessonRouteMatch ? `course-${lessonRouteMatch[2]}` : rawCourseRoute;
 
   const [course, setCourse] = useState<Course | null>(null);
+  const safeLessons: CourseLesson[] = Array.isArray(course?.lessons) ? course.lessons : [];
   const [selectedLessonIndex, setSelectedLessonIndex] = useState(0);
   const [isEnrolled, setIsEnrolled] = useState(false);
   const [userEnrollment, setUserEnrollment] = useState<CourseEnrollment | null>(null);
@@ -136,7 +137,7 @@ export default function CourseDetailPage() {
 
   useEffect(() => {
     if (!course || routeLessonNumber < 1) return;
-    const targetIndex = Math.min(routeLessonNumber - 1, Math.max(course.lessons.length - 1, 0));
+    const targetIndex = Math.min(routeLessonNumber - 1, Math.max(safeLessons.length - 1, 0));
     setSelectedLessonIndex(targetIndex);
   }, [course, routeLessonNumber]);
 
@@ -161,10 +162,10 @@ export default function CourseDetailPage() {
   // Helper to determine if a lesson is locked for the current user
   // The website is preview-only. Full lessons are available in the mobile app.
   const isLessonLocked = (index: number) => {
-    return !(index === 0 && Boolean(course.lessons[0]?.isFreePreview));
+    return !(index === 0 && Boolean(safeLessons[0]?.isFreePreview));
   };
 
-  const activeLesson: CourseLesson | undefined = course.lessons[selectedLessonIndex] || course.lessons[0];
+  const activeLesson: CourseLesson | undefined = safeLessons[selectedLessonIndex] || safeLessons[0];
   const activeLessonLocked = isLessonLocked(selectedLessonIndex);
   const canPlayActiveLesson = !activeLessonLocked && !isEnrolled && Boolean(activeLesson?.isFreePreview);
   const isCurrentCompleted = userEnrollment?.completedLessonIds?.includes(activeLesson?.id || "") || false;
@@ -181,7 +182,7 @@ export default function CourseDetailPage() {
   };
 
   const handleSelectLesson = (index: number) => {
-    const lesson = course.lessons[index];
+    const lesson = safeLessons[index];
     if (!lesson) return;
 
     const locked = isLessonLocked(index);
@@ -197,7 +198,7 @@ export default function CourseDetailPage() {
   };
 
   const handleNextLesson = () => {
-    if (selectedLessonIndex < course.lessons.length - 1) {
+    if (selectedLessonIndex < safeLessons.length - 1) {
       const nextIdx = selectedLessonIndex + 1;
       if (isLessonLocked(nextIdx)) {
         toast({
@@ -213,7 +214,7 @@ export default function CourseDetailPage() {
     }
   };
 
-  const totalMinutes = course.lessons.reduce((acc, l) => acc + (l.durationMinutes || 0), 0);
+  const totalMinutes = safeLessons.reduce((acc, l) => acc + (Number(l?.durationMinutes) || 0), 0);
 
   return (
     <div className="min-h-screen bg-zinc-50/70 py-8 px-4 md:px-8 font-body" dir="rtl">
@@ -261,7 +262,7 @@ export default function CourseDetailPage() {
             {canPlayActiveLesson ? (
               <div className="space-y-4">
                 <ProtectedVideoPlayer
-                  videoUrl={activeLesson.videoUrl}
+                  videoUrl={String(activeLesson.videoUrl || "")}
                   lessonTitle={activeLesson.title}
                   courseTitle={course.title}
                   studentName={currentUserName}
@@ -399,7 +400,7 @@ export default function CourseDetailPage() {
                 </div>
                 <Progress value={userEnrollment?.progressPercent || 0} className="h-2.5 bg-zinc-100" />
                 <p className="text-xs text-zinc-500 font-bold">
-                  أنهيت {userEnrollment?.completedLessonIds?.length || 0} من {course.lessons.length} دروس.
+                  أنهيت {userEnrollment?.completedLessonIds?.length || 0} من {safeLessons.length} دروس.
                 </p>
                 <div className="pt-2 border-t text-xs font-bold text-emerald-700 bg-emerald-50 p-2.5 rounded-xl flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -445,7 +446,7 @@ export default function CourseDetailPage() {
               <div className="flex items-center justify-between pb-3 border-b">
                 <h4 className="font-black text-zinc-800 dark:text-zinc-200 text-sm flex items-center gap-2">
                   <BookOpen className="w-4 h-4 text-primary" />
-                  دروس الكورس ({course.lessons.length})
+                  دروس الكورس ({safeLessons.length})
                 </h4>
                 <span className="text-xs text-zinc-400 font-mono font-bold">
                   {totalMinutes} دقيقة
@@ -453,7 +454,7 @@ export default function CourseDetailPage() {
               </div>
 
               <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
-                {course.lessons.map((lesson, idx) => {
+                {safeLessons.map((lesson, idx) => {
                   const isActive = idx === selectedLessonIndex;
                   const isCompleted = userEnrollment?.completedLessonIds?.includes(lesson.id);
                   const isLocked = isLessonLocked(idx);

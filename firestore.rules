@@ -17,7 +17,7 @@ service cloud.firestore {
       return request.auth != null && (
         isMasterAdmin() ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true)
+         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"))
       );
     }
 
@@ -81,6 +81,12 @@ service cloud.firestore {
     match /users/{userId}/notifications/{notificationId} {
       allow read, update: if isOwner(userId) || isAdmin();
       allow create: if isAdmin();
+    }
+
+
+    match /payments/{paymentId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow write: if false;
     }
 
     // صلاحية الشراء: القراءة للمستخدم صاحب الحساب فقط، والكتابة للخادم/الأدمن فقط.

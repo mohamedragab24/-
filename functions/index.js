@@ -192,45 +192,60 @@ exports.purchaseCourse = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
   const courseId = String(request.data?.courseId || '').trim();
+  const paymentMethod = String(request.data?.paymentMethod || 'balance');
+  const phone = String(request.data?.phone || '').trim();
   if (!courseId) throw new HttpsError('invalid-argument', 'معرف الكورس غير صحيح');
+  if (!['balance', 'card'].includes(paymentMethod)) throw new HttpsError('invalid-argument', 'طريقة الدفع غير مدعومة');
+  if (paymentMethod === 'card' && phone.replace(/[^\d+]/g, '').length < 8) throw new HttpsError('invalid-argument', 'اكتب رقم الهاتف المرتبط بالدفع');
   try {
-    // Course data: Firestore first, then the R2 manifest (same fallback the apps use).
     let course = null;
-    try {
-      const courseSnap = await db.collection('courses').doc(courseId).get();
-      if (courseSnap.exists) course = courseSnap.data() || {};
-    } catch (e) { console.error('purchaseCourse: course read failed', e); }
-    if (!course) {
-      try {
-        const r = await fetch(`${R2_PUBLIC_BASE}/courses/${encodeURIComponent(courseId)}/manifest.json`);
-        if (r.ok) course = await r.json();
-      } catch (e) { console.error('purchaseCourse: manifest read failed', e); }
-    }
+    const courseSnap = await db.collection('courses').doc(courseId).get();
+    if (courseSnap.exists) course = courseSnap.data() || {};
+    if (!course) { try { const r = await fetch(`${R2_PUBLIC_BASE}/courses/${encodeURIComponent(courseId)}/manifest.json`); if (r.ok) course = await r.json(); } catch (_) {} }
     if (!course) throw new HttpsError('not-found', 'الكورس غير موجود');
-    if (course.status && course.status !== 'published' && course.isPublished !== true) {
-      throw new HttpsError('failed-precondition', 'الكورس غير منشور');
-    }
-
+    if (course.status && course.status !== 'published' && course.isPublished !== true) throw new HttpsError('failed-precondition', 'الكورس غير منشور');
+    const amount = Math.max(0, Number(course.price || 0));
     const purchaseRef = db.collection('purchases').doc(`${uid}_${courseId}`);
-    const existing = await purchaseRef.get();
-    if (existing.exists && existing.data()?.status === 'completed') {
-      return { ok: true, alreadyPurchased: true, amountPaid: Number(existing.data()?.amountPaid || course.price || 0) };
+    const existingPurchase = await purchaseRef.get();
+    if (existingPurchase.exists && existingPurchase.data()?.status === 'completed') {
+      const old = existingPurchase.data() || {};
+      return { ok: true, alreadyPurchased: true, paymentId: String(old.paymentId || ''), orderNumber: String(old.orderNumber || ''), amountPaid: Number(old.amountPaid || amount) };
     }
-
-    // Application-level checkout: the entitlement is created server-side here.
-    // With a real payment gateway, create a pending payment and let its verified webhook complete it.
-    const amountPaid = Number(course.price || 0) || 0;
     const paymentRef = db.collection('payments').doc();
     const now = admin.firestore.FieldValue.serverTimestamp();
-    const batch = db.batch();
-    batch.set(paymentRef, { uid, courseId, amount: amountPaid, status: 'completed', source: 'platform_checkout', createdAt: now, completedAt: now });
-    batch.set(purchaseRef, { uid, courseId, status: 'completed', amountPaid, paymentId: paymentRef.id, source: String(request.data?.source || 'web'), purchasedAt: now, updatedAt: now }, { merge: true });
-    await batch.commit();
-
-    // The purchase is already saved: a notification problem must never fail it.
-    try { await sendPurchaseNotification(uid, courseId, course); }
-    catch (e) { console.error('purchaseCourse: notification failed (purchase kept)', e); }
-    return { ok: true, alreadyPurchased: false, paymentId: paymentRef.id, amountPaid };
+    const userSnap = await db.collection('users').doc(uid).get();
+    const userData = userSnap.data() || {};
+    const orderNumber = `FH-${Date.now().toString(36).toUpperCase()}-${paymentRef.id.slice(0, 6).toUpperCase()}`;
+    const common = { orderNumber, uid, courseId, courseName: String(course.title || course.name || ''), amount,
+      userName: String(userData.fullName || userData.name || request.auth.token?.name || ''),
+      email: String(request.auth.token?.email || userData.email || ''), phone: phone || String(userData.phone || ''),
+      source: String(request.data?.source || 'web'), createdAt: now };
+    if (paymentMethod === 'card') {
+      await paymentRef.set({ ...common, status: 'pending', paymentMethod: 'external_pending' });
+      return { ok: true, pending: true, paymentId: paymentRef.id, orderNumber, amountPaid: 0 };
+    }
+    await db.runTransaction(async (tx) => {
+      const purchaseSnap = await tx.get(purchaseRef);
+      if (purchaseSnap.exists && purchaseSnap.data()?.status === 'completed') return;
+      const ledger = db.collection('users').doc(uid).collection('transactions');
+      const ledgerSnap = await tx.get(ledger);
+      let balance = 0;
+      ledgerSnap.forEach((d) => {
+        const t = d.data() || {};
+        if (['rejected', 'pending', 'cancelled'].includes(String(t.status || ''))) return;
+        const n = Number(t.amount || 0);
+        if (['deposit', 'earning', 'refund'].includes(String(t.type || ''))) balance += n; else balance -= n;
+      });
+      if (balance + 0.0001 < amount) throw new HttpsError('failed-precondition', `رصيد المحفظة غير كافٍ. الرصيد الحالي ${balance.toFixed(2)} جنيه`);
+      tx.set(paymentRef, { ...common, status: 'completed', paymentMethod: 'wallet', completedAt: now });
+      tx.set(ledger.doc(), { amount, type: 'payment', status: 'completed', details: `شراء كورس: ${common.courseName || courseId}`, courseId, paymentId: paymentRef.id, orderNumber, timestamp: now });
+      tx.set(purchaseRef, { uid, courseId, status: 'completed', amountPaid: amount, paymentId: paymentRef.id, orderNumber, paymentMethod: 'wallet', source: common.source, purchasedAt: now, updatedAt: now }, { merge: true });
+    });
+    const afterPurchase = await purchaseRef.get();
+    if (afterPurchase.exists && afterPurchase.data()?.status === 'completed') {
+      return { ok: true, alreadyPurchased: false, paymentId: afterPurchase.data()?.paymentId || paymentRef.id, orderNumber: afterPurchase.data()?.orderNumber || orderNumber, amountPaid: Number(afterPurchase.data()?.amountPaid || amount) };
+    }
+    throw new HttpsError('internal', 'لم يتم تسجيل الشراء');
   } catch (e) {
     if (e instanceof HttpsError) throw e;
     console.error('purchaseCourse failed', e);
@@ -294,9 +309,13 @@ exports.onPaymentCompleted = onDocumentWritten("payments/{paymentId}", async (ev
     uid: payment.uid,
     courseId: payment.courseId,
     status: "completed",
+    amountPaid: Number(payment.amount || 0),
+    orderNumber: String(payment.orderNumber || ''),
+    paymentMethod: String(payment.paymentMethod || ''),
+    source: String(payment.source || ''),
     purchasedAt: admin.firestore.FieldValue.serverTimestamp(),
     paymentId: event.params.paymentId,
-  });
+  }, { merge: true });
 
   if (payment.source === 'platform_checkout') return;
   const courseSnap = await db.collection('courses').doc(payment.courseId).get();
@@ -469,9 +488,11 @@ exports.scheduleNotification = onCall(async (request) => {
   const me = await db.collection('users').doc(uid).get();
   if (!(request.auth.token?.admin === true || me.data()?.isAdmin === true || me.data()?.role === 'admin')) throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
   const { title, body, imageUrl, campaign, description, sendAt, audience } = request.data || {};
+  const deliveryMode = String(request.data?.deliveryMode || 'both');
+  if (!['both', 'in_app', 'push'].includes(deliveryMode)) throw new HttpsError('invalid-argument', 'قناة الإرسال غير صحيحة');
   const date = new Date(String(sendAt || ''));
   if (!title || !body || Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) throw new HttpsError('invalid-argument', 'بيانات الإشعار أو الموعد غير صحيحة');
-  const ref = await db.collection('scheduledNotifications').add({ title: String(title), body: String(body), imageUrl: String(imageUrl || ''), campaign: String(campaign || ''), description: String(description || ''), audience: String(audience || 'all'), sendAt: admin.firestore.Timestamp.fromDate(date), status: 'pending', createdBy: uid, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  const ref = await db.collection('scheduledNotifications').add({ title: String(title), body: String(body), imageUrl: String(imageUrl || ''), campaign: String(campaign || ''), description: String(description || ''), audience: String(audience || 'all'), sendAt: admin.firestore.Timestamp.fromDate(date), status: 'pending', deliveryMode, createdBy: uid, createdAt: admin.firestore.FieldValue.serverTimestamp() });
   return { id: ref.id };
 });
 
@@ -514,19 +535,37 @@ exports.dispatchScheduledNotifications = require('firebase-functions/v2/schedule
       for (const t of ts.docs) { const token = t.data().token; if (token) tokens.push(token); }
     }
     let sent = 0;
-    for (let i = 0; i < tokens.length; i += 500) {
-      const chunk = tokens.slice(i, i + 500);
-      const response = await admin.messaging().sendEachForMulticast({ tokens: chunk, notification: { title: n.title, body: n.body, ...(n.imageUrl ? { imageUrl: n.imageUrl } : {}) }, data: { type: n.action || 'admin_campaign', notificationId: doc.id, campaign: String(n.campaign || ''), description: String(n.description || ''), ...(n.requestId ? { requestId: String(n.requestId) } : {}) } });
-      sent += response.successCount;
+    let failed = 0;
+    let lastError = '';
+    const mode = String(n.deliveryMode || 'both');
+    if (mode !== 'in_app') {
+      for (let i = 0; i < tokens.length; i += 500) {
+        const chunk = tokens.slice(i, i + 500);
+        try {
+          const response = await admin.messaging().sendEachForMulticast({ tokens: chunk, notification: { title: n.title, body: n.body, ...(n.imageUrl ? { imageUrl: n.imageUrl } : {}) }, data: { type: n.action || 'admin_campaign', notificationId: doc.id, campaign: String(n.campaign || ''), description: String(n.description || ''), ...(n.requestId ? { requestId: String(n.requestId) } : {}) } });
+          sent += response.successCount;
+          failed += response.failureCount;
+          const firstFailure = response.responses.find(r => !r.success);
+          if (firstFailure?.error) lastError = String(firstFailure.error.message || firstFailure.error.code || 'FCM send failed');
+        } catch (e) { failed += chunk.length; lastError = String(e?.message || e).slice(0, 500); }
+      }
     }
-    const batch = db.batch();
-    for (const u of users.docs) {
-      const payload = { title: n.title, body: n.body, imageUrl: n.imageUrl || '', campaign: n.campaign || '', description: n.description || '', type: n.action || 'admin_campaign', userId: u.id, requestId: n.requestId || null, createdAt: admin.firestore.FieldValue.serverTimestamp(), read: false };
-      batch.set(u.ref.collection('notifications').doc(doc.id), payload, { merge: true });
-      batch.set(db.collection('notifications').doc(`${u.id}_${doc.id}`), payload, { merge: true });
+    let inAppCount = 0;
+    if (mode !== 'push') {
+      for (let start = 0; start < users.length; start += 200) {
+        const batch = db.batch();
+        for (const u of users.slice(start, start + 200)) {
+          const payload = { title: n.title, body: n.body, imageUrl: n.imageUrl || '', campaign: n.campaign || '', description: n.description || '', type: n.action || 'admin_campaign', deliveryMode: mode, userId: u.id, requestId: n.requestId || null, createdAt: admin.firestore.FieldValue.serverTimestamp(), read: false };
+          batch.set(u.ref.collection('notifications').doc(doc.id), payload, { merge: true });
+          batch.set(db.collection('notifications').doc(`${u.id}_${doc.id}`), payload, { merge: true });
+        }
+        await batch.commit();
+      }
+      inAppCount = users.length;
     }
-    await batch.commit();
-    await doc.ref.update({ status: 'sent', sentCount: sent, sentAt: admin.firestore.FieldValue.serverTimestamp() });
+    if (mode !== 'in_app' && tokens.length === 0) { failed = users.length; lastError = 'لا توجد أجهزة مسجلة لاستقبال إشعارات Push'; }
+    const finalStatus = failed > 0 && inAppCount === 0 && sent === 0 ? 'failed' : failed > 0 ? 'partial' : 'sent';
+    await doc.ref.update({ status: finalStatus, sentCount: sent, inAppCount, failedCount: failed, lastError: lastError || '', attemptedAt: admin.firestore.FieldValue.serverTimestamp(), sentAt: admin.firestore.FieldValue.serverTimestamp() });
   }
 });
 

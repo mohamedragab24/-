@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { 
   Dialog, 
   DialogContent, 
@@ -23,6 +23,8 @@ import {
 import { Course } from "@/lib/types";
 import { isUserEnrolled } from "@/lib/courses-data";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { getAuth } from "firebase/auth";
+import { collection, getDocs, getFirestore } from "firebase/firestore";
 import { initializeFirebase } from "@/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
@@ -45,7 +47,7 @@ export function CoursePurchaseDialog({
   studentId = "current-student-id",
   studentName = "مستفهم منصة فهمت",
   studentEmail = "student@fahimt.com",
-  currentBalance = 350,
+  currentBalance,
   onPurchaseSuccess
 }: CoursePurchaseDialogProps) {
   const { toast } = useToast();
@@ -53,6 +55,33 @@ export function CoursePurchaseDialog({
 
   const [paymentMethod, setPaymentMethod] = useState<"balance" | "card">("balance");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [paymentPhone, setPaymentPhone] = useState("");
+  const [walletBalance, setWalletBalance] = useState(Number(currentBalance ?? 0));
+  useEffect(() => {
+    if (typeof currentBalance === "number") setWalletBalance(currentBalance);
+  }, [currentBalance]);
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    (async () => {
+      try {
+        const { firebaseApp } = initializeFirebase();
+        const uid = getAuth(firebaseApp).currentUser?.uid;
+        if (!uid) { if (active && currentBalance == null) setWalletBalance(0); return; }
+        const snap = await getDocs(collection(getFirestore(firebaseApp), "users", uid, "transactions"));
+        let balance = 0;
+        snap.forEach(d => {
+          const t = d.data() || {};
+          if (["rejected", "pending", "cancelled"].includes(String(t.status || ""))) return;
+          const amount = Number(t.amount || 0);
+          if (["deposit", "earning", "refund"].includes(String(t.type || ""))) balance += amount;
+          else balance -= amount;
+        });
+        if (active) setWalletBalance(Math.round(balance * 100) / 100);
+      } catch (e) { console.error("Unable to load wallet balance", e); }
+    })();
+    return () => { active = false; };
+  }, [open, currentBalance]);
 
   if (!course) return null;
 
@@ -83,17 +112,23 @@ export function CoursePurchaseDialog({
       const { firebaseApp } = initializeFirebase();
       const functions = getFunctions(firebaseApp, "us-central1");
       const purchaseCourse = httpsCallable(functions, "purchaseCourse");
-      const result: any = await purchaseCourse({ courseId: course.id, source: "web" });
+      const result: any = await purchaseCourse({ courseId: course.id, source: "web", paymentMethod, phone: paymentPhone.trim() });
       if (!result.data?.ok) throw new Error("purchase_failed");
+      if (result.data?.pending) {
+        setIsProcessing(false);
+        onOpenChange(false);
+        router.push(`/order-complete?paymentId=${encodeURIComponent(result.data.paymentId)}&pending=1`);
+        return;
+      }
 
       setIsProcessing(false);
       toast({
         title: "تم شراء الكورس بنجاح!",
-        description: "تم تسجيل الشراء في Firebase ويمكنك الآن الوصول إليه من التطبيق."
+        description: "تم خصم المبلغ من المحفظة وتسجيل العملية في Firebase."
       });
       onOpenChange(false);
       if (onPurchaseSuccess) onPurchaseSuccess();
-      else router.push(`/courses/${course.id}`);
+      router.push(`/order-complete?paymentId=${encodeURIComponent(result.data.paymentId)}&pending=0`);
     } catch (error: any) {
       console.error("purchaseCourse failed", error);
       setIsProcessing(false);
@@ -183,7 +218,7 @@ export function CoursePurchaseDialog({
                   {course.title}
                 </h4>
                 <p className="text-xs text-zinc-500 font-bold">
-                  بواسطة: {course.instructorName} • {course.lessons.length} دروس
+                  بواسطة: {course.instructorName} • {(Array.isArray(course.lessons) ? course.lessons.length : 0)} دروس
                 </p>
               </div>
             </div>
@@ -207,11 +242,11 @@ export function CoursePurchaseDialog({
                     <Wallet className={`w-5 h-5 ${paymentMethod === "balance" ? "text-primary" : "text-zinc-400"}`} />
                   </div>
                   <p className="text-xs text-zinc-500 font-bold font-mono">
-                    المتوفر: {currentBalance} ج.م
+                    المتوفر: {walletBalance} ج.م
                   </p>
                 </div>
 
-                {/* خيار 2: دفع إلكتروني فوري */}
+                {/* خيار 2: دفع خارجي (يتطلب تفعيل البوابة) */}
                 <div
                   onClick={() => setPaymentMethod("card")}
                   className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
@@ -221,7 +256,7 @@ export function CoursePurchaseDialog({
                   }`}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <span className="font-black text-sm text-zinc-900">دفع إلكتروني فوري</span>
+                    <span className="font-black text-sm text-zinc-900">دفع خارجي (يتطلب تفعيل البوابة)</span>
                     <CreditCard className={`w-5 h-5 ${paymentMethod === "card" ? "text-primary" : "text-zinc-400"}`} />
                   </div>
                   <p className="text-xs text-zinc-500 font-bold">
@@ -229,6 +264,13 @@ export function CoursePurchaseDialog({
                   </p>
                 </div>
               </div>
+              {paymentMethod === "card" && (
+                <div className="mt-3 space-y-2">
+                  <label htmlFor="payment-phone" className="text-sm font-bold text-zinc-700">رقم الهاتف المرتبط بالدفع</label>
+                  <input id="payment-phone" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={e => setPaymentPhone(e.target.value)} placeholder="01xxxxxxxxx" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" />
+                  <p className="text-xs text-amber-700">طلب الدفع الخارجي سيظل معلقًا حتى ربط بوابة دفع وتأكيد التحصيل منها.</p>
+                </div>
+              )}
             </div>
 
             {/* تفاصيل الحساب والإجمالي بالجنيه المصري */}
@@ -260,7 +302,7 @@ export function CoursePurchaseDialog({
 
               <Button
                 onClick={handleConfirmPurchase}
-                disabled={isProcessing}
+                disabled={isProcessing || (paymentMethod === "card" && paymentPhone.trim().replace(/[^\d+]/g, "").length < 8) || (paymentMethod === "balance" && walletBalance < Number(course.price || 0))}
                 className="bg-primary hover:bg-primary/90 text-white font-black rounded-xl px-8 h-12 text-base gap-2"
               >
                 {isProcessing ? "جارٍ إتمام الدفع..." : `تأكيد الشراء (${course.price} ج.م)`}

@@ -21,7 +21,7 @@ export function getStoredCourses(): Course[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     // Ensure all demo mock courses are excluded
-    return parsed.filter((c: any) => c && c.id && !DEMO_COURSE_IDS.has(c.id));
+    return parsed.filter((c: any) => c && c.id && !DEMO_COURSE_IDS.has(c.id)).map((c: any) => toCourse(String(c.id), c));
   } catch (e) {
     console.error("Failed to parse stored courses", e);
     return [];
@@ -40,7 +40,8 @@ export function saveCourses(courses: Course[]): void {
 
 export function getCourseById(id: string): Course | undefined {
   const courses = getStoredCourses();
-  return courses.find(c => c.id === id);
+  const found = courses.find(c => c.id === id);
+  return found ? toCourse(String(found.id), found) : undefined;
 }
 
 export function upsertCourse(course: Course): void {

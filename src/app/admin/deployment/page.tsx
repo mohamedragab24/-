@@ -2,7 +2,8 @@
 "use client";
 
 import { useState } from "react";
-import { useFirestore, useDoc, useMemoFirebase } from "@/firebase";
+import { useFirestore, useDoc, useMemoFirebase, useFirebase } from "@/firebase";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { doc, setDoc, updateDoc } from "firebase/firestore";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,9 +29,11 @@ import { Progress } from "@/components/ui/progress";
  */
 export default function AdminDeployment() {
   const firestore = useFirestore();
+  const { firebaseApp } = useFirebase();
   const { toast } = useToast();
   const [isDeploying, setIsDeploying] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [syncingCourses, setSyncingCourses] = useState(false);
 
   const settingsRef = useMemoFirebase(() => {
     if (!firestore) return null;
@@ -38,6 +41,18 @@ export default function AdminDeployment() {
   }, [firestore]);
 
   const { data: settings } = useDoc(settingsRef);
+
+  const handleBackfillCourseManifests = async () => {
+    if (!firebaseApp) { toast({ variant: "destructive", title: "Firebase غير جاهز" }); return; }
+    setSyncingCourses(true);
+    try {
+      const fn = httpsCallable(getFunctions(firebaseApp, "us-central1"), "backfillCourseManifests");
+      const result: any = await fn({});
+      toast({ title: "تمت مزامنة الكورسات", description: `تم تحديث بيانات ${Number(result.data?.count || 0)} كورس منشور في Cloudflare R2.` });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "تعذرت مزامنة الكورسات", description: e?.message || "تأكد من صلاحيات الأدمن وأسرار R2 ونشر الدوال." });
+    } finally { setSyncingCourses(false); }
+  };
 
   const handleCommitAndSync = async () => {
     if (!firestore || !settingsRef) return;
@@ -131,6 +146,15 @@ export default function AdminDeployment() {
               {isDeploying ? <RefreshCw className="animate-spin" /> : <CloudUpload size={32} />}
               تثبيت التعديلات ومزامنة النظام
             </Button>
+
+            <div className="rounded-3xl border-2 border-emerald-200 bg-emerald-50 p-6 space-y-3">
+              <h3 className="text-xl font-black text-emerald-900">إصلاح الكورسات المنشورة سابقًا</h3>
+              <p className="text-sm font-bold text-emerald-800">يعيد إنشاء manifest.json لكل كورس منشور من بيانات Firebase والدروس المرتبطة به، حتى تستمر الصفحات القديمة في العمل بعد تحديث الموقع أو تغيّر النطاق.</p>
+              <Button disabled={syncingCourses} onClick={handleBackfillCourseManifests} className="w-full gap-2">
+                {syncingCourses ? <RefreshCw className="animate-spin" /> : <CloudUpload />}
+                {syncingCourses ? "جارٍ مزامنة الكورسات…" : "مزامنة الكورسات المنشورة مع R2 الآن"}
+              </Button>
+            </div>
 
             <div className="p-6 bg-blue-50 rounded-3xl border-2 border-dashed border-blue-200 flex items-start gap-4">
               <ShieldCheck className="text-blue-600 shrink-0 mt-1" />

@@ -149,7 +149,7 @@ async function purgeGroup(groupId) {
 exports.createGroup = onCall(async (request) => {
   const uid = reqUid(request);
   const me = (await db.collection('users').doc(uid).get()).data() || {};
-  if (!(me.role === 'mufhem' || me.isAdmin === true)) throw new HttpsError('permission-denied', 'إنشاء المجموعات للمُفهمين فقط');
+  if (!(me.role === 'mufhem' || me.mode === 'mofahhem' || me.isAdmin === true || me.role === 'admin')) throw new HttpsError('permission-denied', 'إنشاء المجموعات للمُفهمين فقط');
   const name = String(request.data?.name || '').trim();
   const description = String(request.data?.description || '').trim().slice(0, 500);
   if (name.length < 3 || name.length > 80) throw new HttpsError('invalid-argument', 'اسم المجموعة من 3 إلى 80 حرفًا');
