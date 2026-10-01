@@ -2,9 +2,10 @@
 "use client";
 
 import { useState } from "react";
-import { useFirestore, useFirebase, useCollection, useMemoFirebase, useUser, useDoc } from "@/firebase";
-import { collection, query, where, getDocs, doc, getDoc, addDoc, updateDoc } from "firebase/firestore";
+import { useFirestore, useCollection, useMemoFirebase, useUser, useDoc } from "@/firebase";
+import { collection, query, where, getDocs, doc, getDoc, updateDoc } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { initializeFirebase } from "@/firebase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +21,6 @@ import { Textarea } from "@/components/ui/textarea";
 
 export default function AdminFinance() {
   const { user } = useUser();
-  const { firebaseApp } = useFirebase();
   const firestore = useFirestore();
   const { toast } = useToast();
   const [searchId, setSearchId] = useState("");
@@ -65,35 +65,53 @@ export default function AdminFinance() {
   const completedPayouts = rawCompleted?.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   const rejectedPayouts = rawRejected?.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-  const callFn = async (name: string, data: any) => {
-    if (!firebaseApp) throw new Error("Firebase غير جاهز");
-    const res: any = await httpsCallable(getFunctions(firebaseApp, "us-central1"), name)(data);
-    return res.data;
-  };
-
   const handleSearch = async () => {
-    if (!searchId.trim()) {
-      toast({ variant: "destructive", title: "تنبيه", description: "اكتب البريد الإلكتروني أو المعرّف العام أو رقم الهاتف." });
+    if (!firestore || !searchId.trim()) {
+      toast({ variant: "destructive", title: "تنبيه", description: "يرجى إدخال البريد الإلكتروني أو المعرف للبحث." });
       return;
     }
+    
     setTargetUser(null);
     try {
-      const u = await callFn("adminFindUser", { query: searchId.trim() });
-      setTargetUser({ id: u.uid, fullName: u.name || u.email, email: u.email, phone: u.phone, publicId: u.publicId, balance: u.balance });
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "خطأ", description: e?.message || "حدث خطأ أثناء محاولة البحث." });
+      const usersRef = collection(firestore, "users");
+      const q = query(usersRef, where("email", "==", searchId.trim()));
+      const snap = await getDocs(q);
+      
+      if (!snap.empty) {
+        setTargetUser({ ...snap.docs[0].data(), id: snap.docs[0].id });
+      } else {
+        const userRef = doc(firestore, "users", searchId.trim());
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          setTargetUser({ ...userSnap.data(), id: userSnap.id });
+        } else {
+          toast({ variant: "destructive", title: "خطأ", description: "عذراً، هذا المستخدم غير موجود." });
+        }
+      }
+    } catch (e) {
+      toast({ variant: "destructive", title: "خطأ", description: "حدث خطأ أثناء محاولة البحث." });
     }
   };
 
   const handleManualAction = async () => {
-    if (!targetUser || !amount) return;
+    if (!firestore || !targetUser || !amount) return;
     try {
-      const r = await callFn("adminAdjustWallet", { uid: targetUser.id, type: actionType, amount: Number(amount) });
-      toast({ title: "تمت العملية!", description: `الرصيد الجديد لـ ${targetUser.fullName}: ${r.balance} ج.م` });
-      setTargetUser({ ...targetUser, balance: r.balance });
+      const numAmount = Number(amount);
+      if (!Number.isFinite(numAmount) || numAmount <= 0) throw new Error("invalid_amount");
+      const { firebaseApp } = initializeFirebase();
+      const fn = httpsCallable(getFunctions(firebaseApp, "us-central1"), "adminAdjustWallet");
+      await fn({
+        userId: targetUser.id,
+        amount: numAmount,
+        action: actionType,
+        details: actionType === 'deposit' ? 'شحن رصيد يدوي بواسطة الإدارة' : 'خصم رصيد يدوي بواسطة الإدارة',
+      });
+      toast({ title: "تمت العملية!", description: `تم تحديث رصيد ${targetUser.fullName || targetUser.name || targetUser.email} بنجاح.` });
       setAmount("");
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "فشل تنفيذ العملية", description: e?.message || "حاول مرة أخرى." });
+      setTargetUser(null);
+      setSearchId("");
+    } catch (e) {
+      toast({ variant: "destructive", title: "خطأ", description: "فشل تنفيذ العملية المالية." });
     }
   };
 
@@ -190,8 +208,7 @@ export default function AdminFinance() {
                     </Avatar>
                     <div>
                       <h4 className="text-xl font-black">{targetUser.fullName}</h4>
-                      <p className="text-sm text-muted-foreground font-bold">{targetUser.email}{targetUser.publicId ? ` • ${targetUser.publicId}` : ""}</p>
-                      {typeof targetUser.balance === "number" && <p className="text-sm font-black text-primary">الرصيد الحالي: {targetUser.balance} ج.م</p>}
+                      <p className="text-sm text-muted-foreground font-bold">{targetUser.email}</p>
                     </div>
                   </div>
 

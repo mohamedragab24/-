@@ -11,20 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useFirebase } from "@/firebase";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { collection, getCountFromServer, limit, onSnapshot, orderBy, query, type Firestore } from "firebase/firestore";
-
-/** عدد الأجهزة/الحسابات التي سجّل التطبيق عندها أن الإشعار وصل فعلًا (إيصال وصول). */
-function DeliveredCell({ id, firestore, total, status }: { id: string; firestore: Firestore | null; total?: number; status?: string }) {
-  const [count, setCount] = useState<number | null>(null);
-  useEffect(() => {
-    if (!firestore || !['sent', 'partial', 'failed'].includes(String(status))) return;
-    getCountFromServer(collection(firestore, "scheduledNotifications", id, "receipts")).then(r => setCount(r.data().count)).catch(() => setCount(null));
-  }, [firestore, id, status]);
-  if (!['sent', 'partial', 'failed'].includes(String(status))) return <>—</>;
-  if (count === null) return <>…</>;
-  const missing = typeof total === 'number' ? Math.max(0, total - count) : null;
-  return <span title="وصل للتطبيق من إجمالي المستلمين">{count}{typeof total === 'number' ? ` / ${total}` : ''}{missing ? <span className="text-orange-600 font-bold"> (لم يصل: {missing})</span> : null}</span>;
-}
+import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 
 export default function AdminNotifications(){
  const { toast } = useToast();
@@ -71,8 +58,8 @@ export default function AdminNotifications(){
     <CardHeader><CardTitle>سجل الإشعارات والحملات السابقة</CardTitle></CardHeader>
     <CardContent>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm text-right"><thead><tr className="border-b"><th className="p-3">الحملة</th><th className="p-3">العنوان</th><th className="p-3">الموعد</th><th className="p-3">الحالة</th><th className="p-3">القناة</th><th className="p-3">تم الإرسال</th><th className="p-3">فشل</th><th className="p-3">وصل للتطبيق</th><th className="p-3">آخر خطأ</th></tr></thead>
-        <tbody>{history.length===0 ? <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">لا توجد حملات بعد</td></tr> : history.map(n=><tr key={n.id} className="border-b"><td className="p-3 font-bold">{n.campaign||'—'}</td><td className="p-3">{n.title||'—'}</td><td className="p-3">{n.sendAt?.toDate ? n.sendAt.toDate().toLocaleString('ar-EG') : '—'}</td><td className="p-3">{n.status==='sent'?'تم الإرسال':n.status==='processing'?'جارٍ الإرسال':n.status==='pending'?'مجدولة':n.status==='partial'?'وصل جزئيًا':n.status==='failed'?'فشل الإرسال':n.status||'—'}</td><td className="p-3">{n.deliveryMode==='in_app'?'داخل التطبيق':n.deliveryMode==='push'?'Push فقط':'التطبيق + Push'}</td><td className="p-3">{typeof n.sentCount==='number'?n.sentCount:'—'}</td><td className="p-3">{typeof n.failedCount==='number'?n.failedCount:'—'}</td><td className="p-3"><DeliveredCell id={n.id} firestore={firestore as any} total={n.recipientCount} status={n.status}/></td><td className="p-3 max-w-40 truncate" title={n.lastError||''}>{n.lastError||'—'}</td></tr>)}</tbody></table>
+        <table className="w-full text-sm text-right"><thead><tr className="border-b"><th className="p-3">الحملة</th><th className="p-3">العنوان</th><th className="p-3">الموعد</th><th className="p-3">الحالة</th><th className="p-3">القناة</th><th className="p-3">تم الإرسال</th><th className="p-3">فشل</th><th className="p-3">آخر خطأ</th></tr></thead>
+        <tbody>{history.length===0 ? <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">لا توجد حملات بعد</td></tr> : history.map(n=><tr key={n.id} className="border-b"><td className="p-3 font-bold">{n.campaign||'—'}</td><td className="p-3">{n.title||'—'}</td><td className="p-3">{n.sendAt?.toDate ? n.sendAt.toDate().toLocaleString('ar-EG') : '—'}</td><td className="p-3">{n.status==='sent'?'تم الإرسال':n.status==='processing'?'جارٍ الإرسال':n.status==='pending'?'مجدولة':n.status==='partial'?'وصل جزئيًا':n.status==='failed'?'فشل الإرسال':n.status||'—'}</td><td className="p-3">{n.deliveryMode==='in_app'?'داخل التطبيق':n.deliveryMode==='push'?'Push فقط':'التطبيق + Push'}</td><td className="p-3">{typeof n.sentCount==='number'?n.sentCount:'—'}</td><td className="p-3">{typeof n.failedCount==='number'?n.failedCount:'—'}</td><td className="p-3 max-w-40 truncate" title={n.lastError||''}>{n.lastError||'—'}</td></tr>)}</tbody></table>
       </div>
     </CardContent>
    </Card>

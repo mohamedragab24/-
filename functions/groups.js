@@ -95,22 +95,31 @@ async function loadOwnedGroup(uid, groupId, { requireActive = true } = {}) {
 }
 
 async function walletBalance(uid) {
+  const wallet = await db.collection('wallets').doc(uid).get();
+  if (wallet.exists && Number.isFinite(Number(wallet.data()?.balance))) return round2(wallet.data().balance);
   const snap = await db.collection('users').doc(uid).collection('transactions').get();
   let b = 0;
   snap.forEach((d) => {
     const tx = d.data() || {};
     const amount = Number(tx.amount || 0);
-    if (tx.status === 'rejected') return;
-    if (tx.type === 'deposit' || tx.type === 'earning') { if (tx.status !== 'pending') b += amount; }
+    if (tx.status === 'rejected' || tx.status === 'pending' || tx.status === 'cancelled') return;
+    if (tx.type === 'deposit' || tx.type === 'earning' || tx.type === 'refund') b += amount;
     else b -= amount;
   });
   return round2(b);
 }
 
 async function chargeWallet(uid, amount, description, extra = {}) {
-  await db.collection('users').doc(uid).collection('transactions').add({
-    type: 'group_fee', amount: round2(amount), status: 'completed', description,
-    timestamp: FV.serverTimestamp(), ...extra,
+  const walletRef = db.collection('wallets').doc(uid);
+  const txRef = db.collection('users').doc(uid).collection('transactions').doc();
+  const value = round2(amount);
+  await db.runTransaction(async (t) => {
+    const wallet = await t.get(walletRef);
+    const current = Number(wallet.data()?.balance || 0);
+    if (current < value) throw new HttpsError('failed-precondition', 'رصيد المحفظة غير كافٍ');
+    const next = round2(current - value);
+    t.set(walletRef, { balance: next, updatedAt: FV.serverTimestamp() }, { merge: true });
+    t.set(txRef, { type: 'group_fee', amount: value, status: 'completed', description, timestamp: FV.serverTimestamp(), balanceAfter: next, ...extra });
   });
 }
 

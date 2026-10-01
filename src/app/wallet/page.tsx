@@ -19,15 +19,7 @@ import {
 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from "@/firebase";
-import { collection, query, orderBy, doc, addDoc, serverTimestamp } from "firebase/firestore";
-import { computeBalance } from "@/lib/wallet";
-
-function fmtDate(v: any): string {
-  try {
-    const d = v?.toDate ? v.toDate() : new Date(v);
-    return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("ar-EG");
-  } catch { return "—"; }
-}
+import { collection, query, orderBy, doc, addDoc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -46,12 +38,22 @@ function WalletContent() {
   const [transferTarget, setTarget] = useState("");
 
   const userRef = useMemoFirebase(() => (firestore && user) ? doc(firestore, "users", user.uid) : null, [firestore, user]);
+  const walletRef = useMemoFirebase(() => (firestore && user) ? doc(firestore, "wallets", user.uid) : null, [firestore, user]);
   const { data: profile } = useDoc(userRef);
+  const { data: walletDoc } = useDoc(walletRef);
 
   const transactionsQuery = useMemoFirebase(() => (firestore && user) ? query(collection(firestore, "users", user.uid, "transactions"), orderBy("timestamp", "desc")) : null, [firestore, user]);
   const { data: transactions, isLoading } = useCollection(transactionsQuery);
 
-  const balance = computeBalance(transactions as any[]);
+  const ledgerBalance = transactions?.reduce((acc: number, tx: any) => {
+    if (['rejected', 'pending', 'cancelled'].includes(String(tx.status || ''))) return acc;
+    const n = Number(tx.amount || 0);
+    if (tx.type === 'deposit' || tx.type === 'earning' || tx.type === 'refund') return acc + n;
+    return acc - n;
+  }, 0) || 0;
+  const balance = Number.isFinite(Number(walletDoc?.balance))
+    ? Number(walletDoc.balance)
+    : ledgerBalance;
 
   const handleTransaction = async () => {
     if (!firestore || !user || !amount || !profile) return;
@@ -83,17 +85,14 @@ function WalletContent() {
       });
       toast({ title: "تم تقديم طلب السحب" });
     } else {
-      // لا يمكن للمستخدم إضافة رصيد لنفسه: نُنشئ طلب شحن تؤكده الإدارة بعد استلام المبلغ.
-      await addDoc(collection(firestore, "topupRequests"), {
-        uid: user.uid,
-        userName: profile?.fullName || profile?.name || "",
-        email: user.email || profile?.email || "",
+      await addDoc(collection(firestore, "users", user.uid, "transactions"), {
         amount: numAmount,
-        reference: String(transferTarget || "").trim(),
-        status: 'pending',
-        createdAt: serverTimestamp(),
+        type: 'deposit',
+        details: 'شحن رصيد المحفظة',
+        status: 'completed',
+        timestamp: new Date().toISOString()
       });
-      toast({ title: "تم إرسال طلب الشحن", description: "سيُضاف الرصيد بعد تأكيد الإدارة استلام المبلغ." });
+      toast({ title: "تم الشحن بنجاح" });
     }
     setIsModalOpen(false);
     setAmount("");
@@ -125,13 +124,6 @@ function WalletContent() {
           <DialogHeader><DialogTitle className="text-right text-3xl font-black">{profile.role === 'mustafhem' ? 'شحن المحفظة' : 'سحب الأرباح'}</DialogTitle></DialogHeader>
           <div className="py-6 space-y-8 text-right">
             <div className="space-y-3"><Label className="font-black text-xl">المبلغ (ج.م)</Label><Input type="number" value={amount} onChange={(e)=>setAmount(e.target.value)} className="h-16 text-3xl font-black text-center rounded-2xl border-2" /></div>
-            {profile.role !== 'mufhem' && (
-              <div className="space-y-2">
-                <Label className="font-black">رقم عملية التحويل أو الرقم المحوَّل منه</Label>
-                <Input value={transferTarget} onChange={(e)=>setTarget(e.target.value)} placeholder="مثال: 01xxxxxxxxx" className="h-14 rounded-xl border-2 font-bold" />
-                <p className="text-xs text-muted-foreground font-bold">بعد تأكيد الإدارة لاستلام المبلغ يُضاف الرصيد تلقائيًا إلى محفظتك.</p>
-              </div>
-            )}
             {profile.role === 'mufhem' && (
               <div className="space-y-6">
                 <Label className="font-black text-xl">وسيلة السحب</Label>
@@ -156,8 +148,8 @@ function WalletContent() {
               {transactions?.map((tx: any) => (
                 <TableRow key={tx.id} className="h-20">
                   <TableCell className="px-8 font-bold">{tx.details}</TableCell>
-                  <TableCell className="text-muted-foreground font-bold">{fmtDate(tx.timestamp)}</TableCell>
-                  <TableCell className={`font-black text-xl ${['deposit','earning','refund'].includes(tx.type) ? 'text-green-600' : 'text-red-600'}`}>{['deposit','earning','refund'].includes(tx.type) ? '+' : '-'}{tx.amount} ج.م</TableCell>
+                  <TableCell className="text-muted-foreground font-bold">{new Date(tx.timestamp).toLocaleDateString('ar-EG')}</TableCell>
+                  <TableCell className={`font-black text-xl ${tx.type === 'deposit' || tx.type === 'earning' ? 'text-green-600' : 'text-red-600'}`}>{tx.type === 'deposit' || tx.type === 'earning' ? '+' : '-'}{tx.amount} ج.م</TableCell>
                   <TableCell className="px-8"><Badge className={tx.status === 'completed' ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}>{tx.status === 'completed' ? 'ناجحة' : 'قيد الانتظار'}</Badge></TableCell>
                 </TableRow>
               ))}

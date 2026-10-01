@@ -23,7 +23,7 @@ export default function OrderSuccessPage() {
         {/* اللوجو */}
         <div className="flex justify-center mb-4">
           <img
-            src="/logo.png"
+            src="/favicon.ico"
             alt="لوجو فهمني"
             className="h-14 object-contain"
           />

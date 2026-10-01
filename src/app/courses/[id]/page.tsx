@@ -1,76 +1,556 @@
-import type { Metadata } from "next";
-import CourseDetailPage from "./course-client";
+"use client";
 
-// صفحة الكورس: تُولَّد عند أول طلب ثم تُخزَّن (ISR) وتُحدَّث كل 5 دقائق.
-// الرابط /courses/<id> ثابت ولا يتغير مع كل تحديث، والبيانات تأتي من R2 (ومن Firebase داخل المتصفح).
-export const revalidate = 300;
-export const dynamicParams = true;
-export async function generateStaticParams() { return []; }
+import React, { useState, useEffect } from "react";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { 
+  ArrowLeft, 
+  ArrowRight,
+  Play, 
+  Lock, 
+  CheckCircle2, 
+  Clock, 
+  ShieldCheck, 
+  GraduationCap, 
+  Share2, 
+  Star, 
+  Layers, 
+  AlertCircle,
+  Sparkles,
+  BookOpen,
+  Bell,
+  BellRing,
+  User,
+  ExternalLink
+} from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Course, CourseLesson, CourseEnrollment } from "@/lib/types";
+import { 
+  getCourseById, 
+  fetchCourseRemote,
+  isUserEnrolled, 
+  getStoredEnrollments, 
+  updateLessonProgress 
+} from "@/lib/courses-data";
+import { ProtectedVideoPlayer } from "@/components/courses/protected-video-player";
+import { CoursePurchaseDialog } from "@/components/courses/course-purchase-dialog";
+import { useToast } from "@/hooks/use-toast";
+import { useFirebase, useFirestore, useDoc, useMemoFirebase, useCollection } from "@/firebase";
+import { doc, collection, getDoc } from "firebase/firestore";
 
-const R2_MANIFEST_BASE = process.env.NEXT_PUBLIC_R2_MANIFEST_BASE || "https://fahmny-r2.mohamedragabewiess.workers.dev";
+export default function CourseDetailPage() {
+  const params = useParams();
+  const router = useRouter();
+  const { toast } = useToast();
+  const { user } = useFirebase();
+  const firestore = useFirestore();
 
-function courseIdFromRoute(raw: string): string {
-  const m = raw.match(/^course(\d+)-(.+)$/i);
-  return m ? `course-${m[2]}` : raw;
-}
+  const userRef = useMemoFirebase(() => (firestore && user) ? doc(firestore, "users", user.uid) : null, [firestore, user]);
+  const { data: profile } = useDoc(userRef);
 
-async function loadManifest(rawId: string): Promise<any | null> {
-  try {
-    const id = courseIdFromRoute(decodeURIComponent(rawId));
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 4000);
-    const res = await fetch(`${R2_MANIFEST_BASE}/courses/${encodeURIComponent(id)}/manifest.json`, { next: { revalidate: 300 }, signal: ctl.signal });
-    clearTimeout(t);
-    if (!res.ok) return null;
-    return { id, ...(await res.json()) };
-  } catch {
-    return null;
+  const rawCourseRoute = Array.isArray(params?.id) ? String(params.id[0] || "") : String(params?.id || "");
+  // دعم روابط الدروس القديمة والجديدة: course2-ID و course-2-ID و course-ID.
+  const lessonRouteMatch = rawCourseRoute?.match(/^course-?(\d+)-(.+)$/i);
+  const routeLessonNumber = lessonRouteMatch ? Number(lessonRouteMatch[1]) : 1;
+  const courseId = lessonRouteMatch ? `course-${lessonRouteMatch[2]}` : rawCourseRoute;
+
+  const [course, setCourse] = useState<Course | null>(null);
+  const safeLessons: CourseLesson[] = Array.isArray(course?.lessons) ? course.lessons : [];
+  const [selectedLessonIndex, setSelectedLessonIndex] = useState(0);
+  const [isEnrolled, setIsEnrolled] = useState(false);
+  const [userEnrollment, setUserEnrollment] = useState<CourseEnrollment | null>(null);
+  const [purchaseOpen, setPurchaseOpen] = useState(false);
+  const instructorRef = useMemoFirebase(() => (firestore && course?.instructorId) ? doc(firestore, "users", course.instructorId) : null, [firestore, course?.instructorId]);
+  const { data: instructorProfile } = useDoc(instructorRef);
+  const followersQuery = useMemoFirebase(() => (firestore && course?.instructorId) ? collection(firestore, "users", course.instructorId, "followers") : null, [firestore, course?.instructorId]);
+  const { data: followers } = useCollection(followersQuery);
+
+  const currentUserId = user?.uid || "guest-user";
+  const currentUserName = profile?.name || user?.displayName || "مستفهم منصة فهمت";
+  const currentUserEmail = user?.email || profile?.email || "student@fahimt.com";
+
+  const refreshCourseState = async () => {
+    if (!courseId) return;
+    let found = getCourseById(courseId);
+    if (!found) found = (await fetchCourseRemote(courseId, firestore)) || undefined;
+    setCourse(found || null);
+    let enrolled = false;
+    if (firestore && user?.uid) {
+      try {
+        const purchaseSnap = await getDoc(doc(firestore, 'purchases', `${user.uid}_${courseId}`));
+        enrolled = purchaseSnap.exists() && purchaseSnap.data()?.status === 'completed';
+      } catch (_) {
+        enrolled = false;
+      }
+    }
+    setIsEnrolled(enrolled);
+
+    const enrollments = getStoredEnrollments();
+    const myEnroll = enrollments.find(e => e.courseId === courseId && e.studentId === currentUserId);
+    setUserEnrollment(myEnroll || null);
+  };
+
+  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isFollowing, setIsFollowing] = useState(false);
+  useEffect(() => { if (user?.uid && followers) setIsFollowing(followers.some((f:any) => f.id === user.uid)); }, [user?.uid, followers]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && course?.instructorId) {
+      try {
+        const subs = JSON.parse(localStorage.getItem("fahimt_subscribed_instructors") || "[]");
+        setIsSubscribed(subs.includes(course.instructorId));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }, [course?.instructorId]);
+
+  const handleToggleSubscribe = async () => {
+    if (!course?.instructorId || !user || !firestore) return;
+    try {
+      const ref = doc(firestore, "users", course.instructorId, "followers", user.uid);
+      if (isFollowing) {
+        const { deleteDoc } = await import("firebase/firestore"); await deleteDoc(ref); setIsFollowing(false);
+      } else {
+        const { setDoc, serverTimestamp } = await import("firebase/firestore"); await setDoc(ref, { uid: user.uid, createdAt: serverTimestamp() }); setIsFollowing(true);
+      }
+      setIsSubscribed(!isFollowing);
+    } catch (e) { toast({variant:"destructive", title:"تعذر تحديث المتابعة", description:"حاول مرة أخرى."}); }
+  };
+
+  useEffect(() => {
+    void refreshCourseState();
+
+    const handleUpdate = () => refreshCourseState();
+    window.addEventListener("fahimt_courses_updated", handleUpdate);
+    window.addEventListener("fahimt_enrollments_updated", handleUpdate);
+
+    return () => {
+      window.removeEventListener("fahimt_courses_updated", handleUpdate);
+      window.removeEventListener("fahimt_enrollments_updated", handleUpdate);
+    };
+  }, [courseId, firestore, user?.uid]);
+
+  useEffect(() => {
+    if (!course || routeLessonNumber < 1) return;
+    const targetIndex = Math.min(routeLessonNumber - 1, Math.max(safeLessons.length - 1, 0));
+    setSelectedLessonIndex(targetIndex);
+  }, [course, routeLessonNumber]);
+
+  if (!course) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center space-y-4 font-body" dir="rtl">
+        <Layers className="w-16 h-16 text-zinc-300" />
+        <h2 className="text-2xl font-black text-zinc-800">جاري تحميل الكورس…</h2>
+        <p className="text-zinc-500 text-sm">إذا استمرت هذه الرسالة، افتح الكورس من التطبيق: <a className="underline" href={`fahmny://course/${courseId}`}>فتح في التطبيق</a></p>
+        <Button asChild className="bg-primary text-white rounded-xl">
+          <Link href="/courses">العودة لدليل الكورسات</Link>
+        </Button>
+      </div>
+    );
   }
-}
 
-function toInitialCourse(d: any) {
-  if (!d) return null;
-  const lessons = Array.isArray(d.lessons) ? d.lessons : [];
-  return {
-    ...d,
-    id: String(d.id),
-    title: String(d.title || d.name || ""),
-    description: String(d.description || ""),
-    coverUrl: String(d.coverUrl || d.thumbnailUrl || ""),
-    price: Number(d.price || 0),
-    features: Array.isArray(d.features) ? d.features : [],
-    lessons: lessons.map((l: any, i: number) => ({
-      ...l,
-      id: String(l?.id || l?.lessonId || i),
-      title: String(l?.title || ""),
-      videoUrl: String(l?.videoUrl || ""),
-      durationMinutes: Number(l?.durationMinutes || 0),
-      order: Number(l?.order ?? i + 1),
-      isFreePreview: l?.isFreePreview ?? l?.isPreview ?? false,
-    })),
-    instructorId: String(d.instructorId || d.ownerUid || ""),
-    instructorName: String(d.instructorName || ""),
-    isPublished: d.isPublished ?? d.status === "published",
-    category: String(d.category || ""),
-    createdAt: typeof d.createdAt === "string" ? d.createdAt : new Date().toISOString(),
+  const isMufhem = profile?.role === "mufhem";
+  const isInstructor = Boolean(
+    isMufhem && user?.uid && course.instructorId && course.instructorId === user.uid
+  );
+
+  // Helper to determine if a lesson is locked for the current user
+  // The website is preview-only. Full lessons are available in the mobile app.
+  const isLessonLocked = (index: number) => {
+    return !(index === 0 && Boolean(safeLessons[0]?.isFreePreview));
   };
-}
 
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
-  const { id } = await params;
-  const m = await loadManifest(id);
-  if (!m) return { title: "كورس - فهمت" };
-  return {
-    title: `${m.title || m.name || "كورس"} - فهمت`,
-    description: String(m.description || "").slice(0, 160),
-    openGraph: { title: String(m.title || m.name || "كورس"), images: m.coverUrl || m.thumbnailUrl ? [String(m.coverUrl || m.thumbnailUrl)] : undefined },
+  const activeLesson: CourseLesson | undefined = safeLessons[selectedLessonIndex] || safeLessons[0];
+  const activeLessonLocked = isLessonLocked(selectedLessonIndex);
+  const canPlayActiveLesson = !activeLessonLocked && !isEnrolled && Boolean(activeLesson?.isFreePreview);
+  const isCurrentCompleted = userEnrollment?.completedLessonIds?.includes(activeLesson?.id || "") || false;
+
+  const handleToggleLessonComplete = () => {
+    if (!activeLesson || !isEnrolled) return;
+    const nextState = !isCurrentCompleted;
+    updateLessonProgress(course.id, currentUserId, activeLesson.id, nextState);
+    toast({
+      title: nextState ? "أحسنت! تم إكمال الدرس" : "تم إلغاء تحديد الإكمال",
+      description: `الدرس: ${activeLesson.title}`
+    });
+    refreshCourseState();
   };
-}
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const manifest = await loadManifest(id);
-  // JSON round-trip يضمن تمرير بيانات قابلة للتسلسل فقط إلى مكوّن العميل
-  const initialCourse = manifest ? JSON.parse(JSON.stringify(toInitialCourse(manifest))) : null;
-  return <CourseDetailPage initialCourse={initialCourse} />;
+  const handleSelectLesson = (index: number) => {
+    const lesson = safeLessons[index];
+    if (!lesson) return;
+
+    const locked = isLessonLocked(index);
+    if (locked) {
+      toast({
+        variant: isEnrolled ? "default" : "destructive",
+        title: isEnrolled ? "المشاهدة الكاملة داخل التطبيق" : "هذه الحلقة متاحة بعد الشراء",
+        description: isEnrolled ? "افتح التطبيق لمشاهدة الحلقة كاملة." : `الدرس "${lesson.title}" متاح بعد شراء الكورس.`,
+      });
+      if (!isEnrolled) setPurchaseOpen(true);
+    }
+    setSelectedLessonIndex(index);
+  };
+
+  const handleNextLesson = () => {
+    if (selectedLessonIndex < safeLessons.length - 1) {
+      const nextIdx = selectedLessonIndex + 1;
+      if (isLessonLocked(nextIdx)) {
+        toast({
+          variant: "destructive",
+          title: "🔒 الدرس التالي مغلق بقفل",
+          description: "يرجى شراء الكورس لفتح بقية الدروس ومتابعة المشاهدة."
+        });
+        setPurchaseOpen(true);
+        setSelectedLessonIndex(nextIdx);
+        return;
+      }
+      setSelectedLessonIndex(nextIdx);
+    }
+  };
+
+  const totalMinutes = safeLessons.reduce((acc, l) => acc + (Number(l?.durationMinutes) || 0), 0);
+
+  return (
+    <div className="min-h-screen bg-zinc-50/70 py-8 px-4 md:px-8 font-body" dir="rtl">
+      <div className="max-w-7xl mx-auto space-y-8">
+
+        {/* شريط التنقل العلوي */}
+        <div className="flex items-center justify-between">
+          <Button asChild variant="ghost" className="font-black text-zinc-600 gap-2 hover:bg-white rounded-xl">
+            <Link href="/courses">
+              <ArrowRight className="w-4 h-4" /> العودة إلى الكورسات
+            </Link>
+          </Button>
+
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="font-bold border-primary text-primary">
+              {course.category}
+            </Badge>
+            {isEnrolled && (
+              <Badge className="bg-emerald-600 text-white font-black">
+                مشترك في الكورس
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        {course.instructorId && (
+          <Card className="rounded-3xl border-2 border-primary/10 shadow-sm">
+            <CardContent className="p-6 flex flex-col md:flex-row items-center gap-5">
+              <Avatar className="h-20 w-20 border-4 border-white shadow-lg"><AvatarImage src={instructorProfile?.profilePictureUrl || ""}/><AvatarFallback>{course.instructorName?.charAt(0)}</AvatarFallback></Avatar>
+              <div className="flex-1 text-center md:text-right">
+                <div className="flex items-center justify-center md:justify-start gap-2"><h3 className="text-xl font-black">{course.instructorName}</h3><Star className="w-4 h-4 fill-yellow-400 text-yellow-400"/></div>
+                <p className="text-sm text-zinc-500 font-bold mt-1">{instructorProfile?.bio || "مُفهّم ناشر الكورس"}</p>
+                <div className="text-xs text-zinc-400 mt-2">{followers?.length || instructorProfile?.followersCount || 0} متابع • {instructorProfile?.followingCount || 0} يتابع • التقييم {Number(instructorProfile?.rating || 0).toFixed(1)}/5</div>
+              </div>
+              <Button onClick={handleToggleSubscribe} variant="outline" className="rounded-xl font-black">{isFollowing ? "متابَع" : "متابعة"}</Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* منطقة المحتوى: المشغل المحمي وقائمة الدروس */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+          {/* القسم الرئيسي (2/3): مشغل الفيديو المحمي أو بطاقة الشراء */}
+          <div className="lg:col-span-2 space-y-6">
+            {canPlayActiveLesson ? (
+              <div className="space-y-4">
+                <ProtectedVideoPlayer
+                  videoUrl={String(activeLesson.videoUrl || "")}
+                  lessonTitle={activeLesson.title}
+                  courseTitle={course.title}
+                  studentName={currentUserName}
+                  studentEmail={currentUserEmail}
+                  studentId={currentUserId}
+                  isCompleted={false}
+                  previewLimitSeconds={120}
+                />
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between text-right gap-4">
+                  <div className="space-y-0.5">
+                    <h5 className="font-black text-amber-900 text-sm">معاينة مجانية لمدة دقيقتين</h5>
+                    <p className="text-xs text-amber-700 font-bold">المشاهدة الكاملة لجميع الحلقات متاحة داخل تطبيق Fahimt بعد تسجيل الدخول بالحساب المشتري.</p>
+                  </div>
+                  <Button onClick={() => setPurchaseOpen(true)} className="bg-primary text-white font-black text-xs h-10 px-5 rounded-xl shrink-0">شراء الكورس ({course.price} ج.م)</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="relative aspect-video rounded-3xl overflow-hidden bg-zinc-950 border-4 border-zinc-800 shadow-2xl flex flex-col items-center justify-center p-8 text-center text-white space-y-5">
+                <div className="w-20 h-20 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center text-primary backdrop-blur-md shadow-inner"><Lock className="w-10 h-10" /></div>
+                <div className="space-y-2 max-w-md">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/20 text-primary-foreground font-black text-xs border border-primary/30">المشاهدة الكاملة داخل التطبيق فقط</div>
+                  <h3 className="text-2xl font-black">{activeLesson?.title || "محتوى الكورس"}</h3>
+                  <p className="text-zinc-400 text-xs md:text-sm font-bold leading-relaxed">لا يتم تشغيل الحلقات الكاملة على المنصة. إذا كان حسابك مشتريًا للكورس، افتح الكورس من تطبيق Fahimt لمتابعة المشاهدة الكاملة.</p>
+                </div>
+                {!isEnrolled && <Button onClick={() => setPurchaseOpen(true)} className="bg-primary hover:bg-primary/90 text-white font-black rounded-2xl h-14 px-8 text-base shadow-xl gap-2"><Lock className="w-5 h-5" /><span>شراء الكورس ({course.price} ج.م)</span></Button>}
+                {isEnrolled && <a href={`fahmny://course/${course.id}`} className="inline-flex items-center justify-center bg-primary hover:bg-primary/90 text-white font-black rounded-2xl h-14 px-8 text-base shadow-xl">فتح الكورس في التطبيق</a>}
+              </div>
+            )}
+
+            {/* تفاصيل ووصف الكورس */}
+            <div className="bg-white dark:bg-zinc-900 border rounded-3xl p-6 md:p-8 space-y-6 text-right shadow-sm">
+              <div className="space-y-3">
+                <h2 className="text-2xl md:text-3xl font-black text-zinc-900 dark:text-white">
+                  {course.title}
+                </h2>
+                <div className="flex flex-wrap items-center gap-4 text-xs font-bold text-zinc-500">
+                  <span className="flex items-center gap-1">
+                    <GraduationCap className="w-4 h-4 text-primary" />
+                    المفهم: {course.instructorName}
+                  </span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1 font-mono">
+                    <Clock className="w-4 h-4 text-zinc-400" />
+                    المدة الكلية: {totalMinutes} دقيقة
+                  </span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1 text-amber-500 font-bold">
+                    <Star className="w-4 h-4 fill-current" />
+                    {course.rating || 5.0} تقييم عام
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t">
+                <h4 className="font-black text-base text-zinc-800 dark:text-zinc-200">عن هذا الكورس:</h4>
+                <p className="text-zinc-600 dark:text-zinc-400 font-bold text-sm leading-relaxed whitespace-pre-line">
+                  {course.description}
+                </p>
+              </div>
+
+              {/* بطاقة المُفهم مع صورته الشخصية وزر دخول الملف الشخصي وزر تفعيل الإشعارات */}
+              <div className="p-5 bg-zinc-50 dark:bg-zinc-800/50 rounded-3xl border-2 border-zinc-200 dark:border-zinc-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <Avatar className="w-14 h-14 rounded-2xl border-2 border-primary/20 shadow-md shrink-0">
+                    <AvatarImage src={course.instructorAvatar} alt={course.instructorName} />
+                    <AvatarFallback className="bg-primary/10 text-primary font-black text-lg">
+                      {course.instructorName?.charAt(0) || "م"}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-black text-base text-zinc-900 dark:text-white">
+                        {course.instructorName}
+                      </h4>
+                      <Badge className="bg-primary/15 text-primary border-none text-[11px] font-black px-2.5 py-0.5 rounded-lg">
+                        مُفهم
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-zinc-500 font-bold">
+                      مُقدم هذا الكورس • يمكنك متابعته واستلام إشعارات كورساته القادمة فور نزولها
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <Button
+                    asChild
+                    variant="outline"
+                    className="rounded-xl font-black text-xs h-10 px-4 border-zinc-300 dark:border-zinc-700 hover:border-primary gap-1.5 cursor-pointer"
+                  >
+                    <Link href="/profile">
+                      <User className="w-3.5 h-3.5 text-primary" />
+                      <span>الملف الشخصي للمُفهم</span>
+                    </Link>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    onClick={handleToggleSubscribe}
+                    variant={isSubscribed ? "default" : "outline"}
+                    className={`rounded-xl font-black text-xs h-10 px-4 gap-2 cursor-pointer shadow-sm transition-all ${
+                      isSubscribed
+                        ? "bg-amber-500 hover:bg-amber-600 text-white border-none"
+                        : "border-amber-300 text-amber-700 dark:text-amber-300 bg-amber-50/60 hover:bg-amber-100"
+                    }`}
+                  >
+                    {isSubscribed ? (
+                      <>
+                        <BellRing className="w-4 h-4 text-white animate-bounce" />
+                        <span>الإشعارات مفعّلة 🔔</span>
+                      </>
+                    ) : (
+                      <>
+                        <Bell className="w-4 h-4 text-amber-600" />
+                        <span>تفعيل إشعارات الكورسات القادمة</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* القسم الجانبي (1/3): قائمة الدروس والتقدم وشراء الكورس */}
+          <div className="space-y-6">
+
+            {/* بطاقة التقدم (في حال المشترك) أو لوحة المفهم أو الشراء (في حال غير المشترك) */}
+            {isEnrolled ? (
+              <Card className="rounded-3xl border-2 bg-white shadow-sm p-6 text-right space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-black text-zinc-800 text-sm">نسبة تقدمك في الكورس</h4>
+                  <span className="font-black font-mono text-primary text-base">
+                    {userEnrollment?.progressPercent || 0}%
+                  </span>
+                </div>
+                <Progress value={userEnrollment?.progressPercent || 0} className="h-2.5 bg-zinc-100" />
+                <p className="text-xs text-zinc-500 font-bold">
+                  أنهيت {userEnrollment?.completedLessonIds?.length || 0} من {safeLessons.length} دروس.
+                </p>
+                <div className="pt-2 border-t text-xs font-bold text-emerald-700 bg-emerald-50 p-2.5 rounded-xl flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>أنت مشترك بالفعل ولديك وصول كامل لجميع الدروس.</span>
+                </div>
+              </Card>
+            ) : isInstructor ? (
+              <Card className="rounded-3xl border-2 bg-gradient-to-br from-white to-primary/5 shadow-md p-6 text-right space-y-4">
+                <div className="space-y-1">
+                  <Badge className="bg-primary/10 text-primary border-none font-bold text-xs">أنت ناشر هذا الكورس</Badge>
+                  <h4 className="font-black text-lg text-zinc-900">صلاحيات كاملة للمفهم</h4>
+                  <p className="text-xs text-zinc-500 font-bold leading-relaxed">
+                    بصفتك المفهم وناشر الكورس، يمكنك مشاهدة كافة الأجزاء والفيديوهات بحرية بدون شراء، وإدارة المحتوى ومتابعة إحصائيات طلابك.
+                  </p>
+                </div>
+                <div className="pt-2 border-t flex flex-col gap-2">
+                  <Button asChild className="w-full bg-primary text-white font-black rounded-xl h-11 text-xs">
+                    <Link href="/courses">لوحة إدارة كورساتي</Link>
+                  </Button>
+                </div>
+              </Card>
+            ) : (
+              <Card className="rounded-3xl border-2 bg-gradient-to-br from-white to-primary/5 shadow-md p-6 text-right space-y-5">
+                <div className="space-y-1">
+                  <span className="text-xs text-zinc-500 font-bold block">سعر الكورس الكامل</span>
+                  <div className="text-3xl font-black text-primary font-mono">
+                    {course.price} <span className="text-base font-sans font-bold text-zinc-700">ج.م</span>
+                  </div>
+                </div>
+
+                <Button
+                  onClick={() => setPurchaseOpen(true)}
+                  className="w-full bg-primary hover:bg-primary/90 text-white font-black rounded-xl h-14 text-base shadow-lg hover:scale-102 transition-all gap-2 cursor-pointer"
+                >
+                  <Lock className="w-4 h-4" />
+                  شراء الكورس والبدء فوراً
+                </Button>
+              </Card>
+            )}
+
+            {/* قائمة تشغيل الدروس (Playlist) */}
+            <div className="bg-white dark:bg-zinc-900 border rounded-3xl p-5 shadow-sm space-y-4 text-right">
+              <div className="flex items-center justify-between pb-3 border-b">
+                <h4 className="font-black text-zinc-800 dark:text-zinc-200 text-sm flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-primary" />
+                  دروس الكورس ({safeLessons.length})
+                </h4>
+                <span className="text-xs text-zinc-400 font-mono font-bold">
+                  {totalMinutes} دقيقة
+                </span>
+              </div>
+
+              <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
+                {safeLessons.map((lesson, idx) => {
+                  const isActive = idx === selectedLessonIndex;
+                  const isCompleted = userEnrollment?.completedLessonIds?.includes(lesson.id);
+                  const isLocked = isLessonLocked(idx);
+
+                  return (
+                    <div
+                      key={lesson.id}
+                      onClick={() => handleSelectLesson(idx)}
+                      className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between gap-3 text-right ${
+                        isActive
+                          ? "border-primary bg-primary/5 shadow-sm ring-2 ring-primary/20"
+                          : isLocked
+                          ? "border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/40 hover:border-red-300 hover:bg-red-50/20"
+                          : "border-zinc-200 dark:border-zinc-800 hover:border-primary/40 bg-white dark:bg-zinc-900"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        {/* حالة الأيقونة: قفل أحمر بارز أو إكمال أو تشغيل */}
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${
+                          isCompleted
+                            ? "bg-emerald-100 text-emerald-600"
+                            : isLocked
+                            ? "bg-red-50 text-red-600 border border-red-200"
+                            : isActive
+                            ? "bg-primary text-white"
+                            : "bg-zinc-100 text-zinc-700"
+                        }`}>
+                          {isCompleted ? (
+                            <CheckCircle2 className="w-4 h-4" />
+                          ) : isLocked ? (
+                            <Lock className="w-4 h-4 text-red-600 stroke-[2.5]" />
+                          ) : (
+                            <Play className="w-3.5 h-3.5 fill-current translate-x-0.5" />
+                          )}
+                        </div>
+
+                        <div className="space-y-0.5">
+                          <h5 className={`font-black text-xs leading-snug ${
+                            isActive 
+                              ? "text-primary" 
+                              : isLocked 
+                              ? "text-zinc-700 dark:text-zinc-300" 
+                              : "text-zinc-900 dark:text-zinc-100"
+                          }`}>
+                            {lesson.title}
+                          </h5>
+                          <div className="flex items-center gap-2 text-[11px] text-zinc-400 font-mono">
+                            <span>{lesson.durationMinutes} دقيقة</span>
+                            {isLocked && (
+                              <>
+                                <span>•</span>
+                                <span className="text-red-600 font-sans font-bold flex items-center gap-1">
+                                  <Lock className="w-3 h-3" /> مقفل
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {isLocked ? (
+                        <Badge className="text-[10px] bg-red-100/90 text-red-700 hover:bg-red-200 border-none shrink-0 font-black gap-1 flex items-center py-1 px-2.5">
+                          <Lock className="w-3 h-3" /> قفل
+                        </Badge>
+                      ) : (idx === 0 && lesson.isFreePreview && !isEnrolled && !isInstructor) ? (
+                        <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600 bg-emerald-50 shrink-0 font-bold">
+                          معاينة مجانية (الدرس الأول)
+                        </Badge>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* حوار الشراء */}
+        <CoursePurchaseDialog
+          open={purchaseOpen}
+          onOpenChange={setPurchaseOpen}
+          course={course}
+          studentId={currentUserId}
+          studentName={currentUserName}
+          studentEmail={currentUserEmail}
+          onPurchaseSuccess={() => {
+            void refreshCourseState();
+            toast({
+              title: "تم تفعيل الكورس بنجاح!",
+              description: "يمكنك الآن مشاهدة جميع الدروس مباشرة."
+            });
+          }}
+        />
+
+      </div>
+    </div>
+  );
 }
