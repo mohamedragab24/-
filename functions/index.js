@@ -229,13 +229,7 @@ exports.purchaseCourse = onCall(async (request) => {
       if (purchaseSnap.exists && purchaseSnap.data()?.status === 'completed') return;
       const ledger = db.collection('users').doc(uid).collection('transactions');
       const ledgerSnap = await tx.get(ledger);
-      let balance = 0;
-      ledgerSnap.forEach((d) => {
-        const t = d.data() || {};
-        if (['rejected', 'pending', 'cancelled'].includes(String(t.status || ''))) return;
-        const n = Number(t.amount || 0);
-        if (['deposit', 'earning', 'refund'].includes(String(t.type || ''))) balance += n; else balance -= n;
-      });
+      const balance = ledgerBalance(ledgerSnap);
       if (balance + 0.0001 < amount) throw new HttpsError('failed-precondition', `رصيد المحفظة غير كافٍ. الرصيد الحالي ${balance.toFixed(2)} جنيه`);
       tx.set(paymentRef, { ...common, status: 'completed', paymentMethod: 'wallet', completedAt: now });
       tx.set(ledger.doc(), { amount, type: 'payment', status: 'completed', details: `شراء كورس: ${common.courseName || courseId}`, courseId, paymentId: paymentRef.id, orderNumber, timestamp: now });
@@ -565,7 +559,7 @@ exports.dispatchScheduledNotifications = require('firebase-functions/v2/schedule
     }
     if (mode !== 'in_app' && tokens.length === 0) { failed = users.length; lastError = 'لا توجد أجهزة مسجلة لاستقبال إشعارات Push'; }
     const finalStatus = failed > 0 && inAppCount === 0 && sent === 0 ? 'failed' : failed > 0 ? 'partial' : 'sent';
-    await doc.ref.update({ status: finalStatus, sentCount: sent, inAppCount, failedCount: failed, lastError: lastError || '', attemptedAt: admin.firestore.FieldValue.serverTimestamp(), sentAt: admin.firestore.FieldValue.serverTimestamp() });
+    await doc.ref.update({ status: finalStatus, recipientCount: users.length, sentCount: sent, inAppCount, failedCount: failed, lastError: lastError || '', attemptedAt: admin.firestore.FieldValue.serverTimestamp(), sentAt: admin.firestore.FieldValue.serverTimestamp() });
   }
 });
 
@@ -730,4 +724,118 @@ exports.backfillCourseManifests = onCall({ secrets: R2_SECRETS, timeoutSeconds: 
 
 
 // المجموعات
+
+/* ------------------------------------------------------------------ */
+/* المحفظة والمدفوعات: كل ما يغيّر الرصيد يمر من الخادم فقط            */
+/* ------------------------------------------------------------------ */
+async function assertAdmin(request) {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  const me = await db.collection('users').doc(uid).get();
+  const email = String(request.auth.token?.email || '').toLowerCase();
+  const masters = ['mohamed76y@gmail.com', 'mohamjedminijd2006@gmail.com', 'mohamedmini2006@gamil.com'];
+  if (!(request.auth.token?.admin === true || me.data()?.isAdmin === true || me.data()?.role === 'admin' || masters.includes(email))) {
+    throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
+  }
+  return uid;
+}
+
+/** رصيد المستخدم من سجل المعاملات (نفس منطق purchaseCourse وصفحة المحفظة). */
+function ledgerBalance(snap) {
+  let balance = 0;
+  snap.forEach((d) => {
+    const t = d.data() || {};
+    const status = String(t.status || '');
+    const type = String(t.type || '');
+    const n = Number(t.amount || 0);
+    if (['rejected', 'cancelled'].includes(status)) return;
+    if (status === 'pending') { if (type === 'withdrawal') balance -= n; return; }
+    if (['deposit', 'earning', 'refund'].includes(type)) balance += n; else balance -= n;
+  });
+  return Math.round(balance * 100) / 100;
+}
+
+/** البحث عن مستخدم بالبريد أو المعرّف العام أو الهاتف أو الـ uid (للأدمن). */
+exports.adminFindUser = onCall(async (request) => {
+  await assertAdmin(request);
+  const q = String(request.data?.query || '').trim();
+  if (!q) throw new HttpsError('invalid-argument', 'اكتب البريد أو المعرّف أو رقم الهاتف');
+  let doc = null;
+  for (const field of ['email', 'publicId', 'phone']) {
+    const r = await db.collection('users').where(field, '==', field === 'email' ? q.toLowerCase() : q).limit(1).get();
+    if (!r.empty) { doc = r.docs[0]; break; }
+    if (field === 'email') { const r2 = await db.collection('users').where('email', '==', q).limit(1).get(); if (!r2.empty) { doc = r2.docs[0]; break; } }
+  }
+  if (!doc) { const byId = await db.collection('users').doc(q).get(); if (byId.exists) doc = byId; }
+  if (!doc) throw new HttpsError('not-found', 'لا يوجد مستخدم بهذه البيانات');
+  const ledger = await doc.ref.collection('transactions').get();
+  const u = doc.data() || {};
+  return { uid: doc.id, name: String(u.fullName || u.name || ''), email: String(u.email || ''), phone: String(u.phone || ''), publicId: String(u.publicId || ''), balance: ledgerBalance(ledger) };
+});
+
+/** شحن/خصم يدوي من لوحة التحكم — يُسجَّل في دفتر المستخدم وفي سجل الأدمن ويصل للمستخدم إشعار. */
+exports.adminAdjustWallet = onCall(async (request) => {
+  const adminUid = await assertAdmin(request);
+  const targetUid = String(request.data?.uid || '').trim();
+  const type = String(request.data?.type || 'deposit');
+  const amount = Math.round(Number(request.data?.amount) * 100) / 100;
+  const note = String(request.data?.note || '').slice(0, 200);
+  if (!targetUid) throw new HttpsError('invalid-argument', 'المستخدم مطلوب');
+  if (!['deposit', 'withdrawal'].includes(type)) throw new HttpsError('invalid-argument', 'نوع العملية غير صحيح');
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) throw new HttpsError('invalid-argument', 'المبلغ غير صحيح');
+  const userRef = db.collection('users').doc(targetUid);
+  const userSnap = await userRef.get();
+  if (!userSnap.exists) throw new HttpsError('not-found', 'المستخدم غير موجود');
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const txRef = userRef.collection('transactions').doc();
+  await txRef.set({ amount, type, status: 'completed', details: note || (type === 'deposit' ? 'شحن رصيد بواسطة الإدارة' : 'خصم رصيد بواسطة الإدارة'), by: adminUid, timestamp: now });
+  await db.collection('adminLogs').add({ action: type === 'deposit' ? 'manual_recharge' : 'manual_deduction', targetUserId: targetUid, amount, by: adminUid, timestamp: now });
+  await userRef.collection('notifications').add({
+    title: type === 'deposit' ? 'تم شحن محفظتك' : 'تم خصم مبلغ من محفظتك',
+    body: `${type === 'deposit' ? 'أُضيف' : 'خُصم'} ${amount} جنيه ${type === 'deposit' ? 'إلى' : 'من'} رصيدك.`,
+    type: 'wallet', read: false, createdAt: now,
+  });
+  const balance = ledgerBalance(await userRef.collection('transactions').get());
+  return { ok: true, balance };
+});
+
+/** تأكيد/رفض طلب شحن أرسله المستخدم. */
+exports.reviewTopupRequest = onCall(async (request) => {
+  const adminUid = await assertAdmin(request);
+  const id = String(request.data?.requestId || '');
+  const approve = request.data?.approve === true;
+  if (!id) throw new HttpsError('invalid-argument', 'رقم الطلب مطلوب');
+  const ref = db.collection('topupRequests').doc(id);
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new HttpsError('not-found', 'الطلب غير موجود');
+    const r = snap.data() || {};
+    if (r.status !== 'pending') throw new HttpsError('failed-precondition', 'تمت مراجعة هذا الطلب مسبقًا');
+    if (approve) {
+      const amount = Math.round(Number(r.amount || 0) * 100) / 100;
+      if (!(amount > 0)) throw new HttpsError('invalid-argument', 'مبلغ غير صحيح');
+      tx.set(db.collection('users').doc(String(r.uid)).collection('transactions').doc(), { amount, type: 'deposit', status: 'completed', details: 'شحن رصيد (طلب مؤكَّد)', topupRequestId: id, by: adminUid, timestamp: now });
+    }
+    tx.update(ref, { status: approve ? 'approved' : 'rejected', reviewedBy: adminUid, reviewedAt: now });
+  });
+  return { ok: true };
+});
+
+/** تأكيد/رفض دفع خارجي معلّق (دفع برقم الهاتف). التأكيد يفتح الكورس عبر onPaymentCompleted. */
+exports.reviewExternalPayment = onCall(async (request) => {
+  const adminUid = await assertAdmin(request);
+  const paymentId = String(request.data?.paymentId || '');
+  const approve = request.data?.approve === true;
+  if (!paymentId) throw new HttpsError('invalid-argument', 'رقم الطلب مطلوب');
+  const ref = db.collection('payments').doc(paymentId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'الطلب غير موجود');
+  if (snap.data()?.status !== 'pending') throw new HttpsError('failed-precondition', 'تمت مراجعة هذا الطلب مسبقًا');
+  await ref.update(approve
+    ? { status: 'completed', paymentMethod: 'phone', completedAt: admin.firestore.FieldValue.serverTimestamp(), reviewedBy: adminUid }
+    : { status: 'rejected', reviewedBy: adminUid, reviewedAt: admin.firestore.FieldValue.serverTimestamp() });
+  return { ok: true };
+});
+
 Object.assign(exports, require('./groups'));

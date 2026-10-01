@@ -26,6 +26,7 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { getAuth } from "firebase/auth";
 import { collection, getDocs, getFirestore } from "firebase/firestore";
 import { initializeFirebase } from "@/firebase";
+import { computeBalance } from "@/lib/wallet";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
 
@@ -69,14 +70,7 @@ export function CoursePurchaseDialog({
         const uid = getAuth(firebaseApp).currentUser?.uid;
         if (!uid) { if (active && currentBalance == null) setWalletBalance(0); return; }
         const snap = await getDocs(collection(getFirestore(firebaseApp), "users", uid, "transactions"));
-        let balance = 0;
-        snap.forEach(d => {
-          const t = d.data() || {};
-          if (["rejected", "pending", "cancelled"].includes(String(t.status || ""))) return;
-          const amount = Number(t.amount || 0);
-          if (["deposit", "earning", "refund"].includes(String(t.type || ""))) balance += amount;
-          else balance -= amount;
-        });
+        const balance = computeBalance(snap.docs.map(d => d.data()));
         if (active) setWalletBalance(Math.round(balance * 100) / 100);
       } catch (e) { console.error("Unable to load wallet balance", e); }
     })();
@@ -107,6 +101,13 @@ export function CoursePurchaseDialog({
       return;
     }
 
+    if (!getAuth(initializeFirebase().firebaseApp).currentUser) {
+      toast({ variant: "destructive", title: "سجّل الدخول أولاً", description: "لازم تسجّل الدخول قبل شراء الكورس." });
+      onOpenChange(false);
+      router.push("/login");
+      return;
+    }
+
     setIsProcessing(true);
     try {
       const { firebaseApp } = initializeFirebase();
@@ -124,7 +125,7 @@ export function CoursePurchaseDialog({
       setIsProcessing(false);
       toast({
         title: "تم شراء الكورس بنجاح!",
-        description: "تم خصم المبلغ من المحفظة وتسجيل العملية في Firebase."
+        description: "تم خصم المبلغ من محفظتك وتسجيل العملية."
       });
       onOpenChange(false);
       if (onPurchaseSuccess) onPurchaseSuccess();
@@ -246,7 +247,7 @@ export function CoursePurchaseDialog({
                   </p>
                 </div>
 
-                {/* خيار 2: دفع خارجي (يتطلب تفعيل البوابة) */}
+                {/* خيار 2: الدفع برقم الهاتف */}
                 <div
                   onClick={() => setPaymentMethod("card")}
                   className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
@@ -256,11 +257,11 @@ export function CoursePurchaseDialog({
                   }`}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <span className="font-black text-sm text-zinc-900">دفع خارجي (يتطلب تفعيل البوابة)</span>
+                    <span className="font-black text-sm text-zinc-900">الدفع برقم الهاتف</span>
                     <CreditCard className={`w-5 h-5 ${paymentMethod === "card" ? "text-primary" : "text-zinc-400"}`} />
                   </div>
                   <p className="text-xs text-zinc-500 font-bold">
-                    فيزا، ماستركارد، فودافون كاش، محافظ
+                    محفظة إلكترونية / فودافون كاش (تأكيد الإدارة)
                   </p>
                 </div>
               </div>
@@ -268,7 +269,7 @@ export function CoursePurchaseDialog({
                 <div className="mt-3 space-y-2">
                   <label htmlFor="payment-phone" className="text-sm font-bold text-zinc-700">رقم الهاتف المرتبط بالدفع</label>
                   <input id="payment-phone" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={e => setPaymentPhone(e.target.value)} placeholder="01xxxxxxxxx" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" />
-                  <p className="text-xs text-amber-700">طلب الدفع الخارجي سيظل معلقًا حتى ربط بوابة دفع وتأكيد التحصيل منها.</p>
+                  <p className="text-xs text-amber-700">بعد تحويل المبلغ يُسجَّل طلبك برقم طلب، ويُفتح الكورس فور تأكيد الإدارة استلام المبلغ.</p>
                 </div>
               )}
             </div>
@@ -292,7 +293,7 @@ export function CoursePurchaseDialog({
             {/* رسالة الأمان */}
             <div className="flex items-center gap-2 text-xs font-bold text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 p-3 rounded-xl">
               <ShieldCheck className="w-4 h-4 shrink-0" />
-              <span>عند الشراء يفتح لك باقي أجزاء وفيديوهات الكورس فوراً داخل المنصة.</span>
+              <span>بعد الشراء تشاهد الكورس كاملًا داخل تطبيق فهّمني بنفس الحساب.</span>
             </div>
 
             <DialogFooter className="flex flex-row items-center justify-between pt-2 border-t gap-3">

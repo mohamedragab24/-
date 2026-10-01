@@ -63,6 +63,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       title: "المالية والترويج",
       items: [
         { label: "إدارة المالية", href: "/admin/finance", icon: BadgeCent },
+        { label: "المدفوعات وطلبات الشحن", href: "/admin/payments", icon: BadgeCent },
         { label: "الكوبونات", href: "/admin/coupons", icon: Ticket },
       ]
     },
