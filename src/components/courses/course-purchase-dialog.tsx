@@ -130,13 +130,19 @@ export function CoursePurchaseDialog({
       console.error("purchaseCourse failed", error);
       setIsProcessing(false);
       const code = String(error?.code || "");
-      const generic = code.endsWith("/internal") || error?.message === "internal";
+      const message = String(error?.message || "").trim();
+      let description = message || "حاول مرة أخرى.";
+      if (code.endsWith("/not-found") || code.endsWith("/unavailable")) {
+        description = "دالة الشراء غير متاحة حاليًا. يجب نشر purchaseCourse في Firebase على المنطقة us-central1.";
+      } else if (code.endsWith("/unauthenticated")) {
+        description = "انتهت جلسة تسجيل الدخول. سجّل الدخول مرة أخرى ثم أعد المحاولة.";
+      } else if (code.endsWith("/internal") || message === "internal") {
+        description = "حدث خطأ داخل خدمة الشراء. راجع سجل Cloud Functions للدالة purchaseCourse.";
+      }
       toast({
         variant: "destructive",
         title: "تعذر إتمام الشراء",
-        description: generic
-          ? "تعذر الاتصال بخدمة الشراء. تأكد من نشر دوال Firebase (purchaseCourse) ثم حاول مرة أخرى."
-          : error?.message || "حاول مرة أخرى.",
+        description,
       });
     }
   };
