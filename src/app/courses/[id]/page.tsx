@@ -53,10 +53,14 @@ export default function CourseDetailPage() {
   const { data: profile } = useDoc(userRef);
 
   const rawCourseRoute = Array.isArray(params?.id) ? String(params.id[0] || "") : String(params?.id || "");
-  // دعم روابط الدروس القديمة والجديدة: course2-ID و course-2-ID و course-ID.
-  const lessonRouteMatch = rawCourseRoute?.match(/^course-?(\d+)-(.+)$/i);
-  const routeLessonNumber = lessonRouteMatch ? Number(lessonRouteMatch[1]) : 1;
-  const courseId = lessonRouteMatch ? `course-${lessonRouteMatch[2]}` : rawCourseRoute;
+
+  // روابط الدروس تكون بالشكل course-1-ID إلى course-110-ID.
+  // مهم: لا نعتبر أي أرقام داخل Course ID نفسه رقم درس (مثل course-1789479520261-ryfp).
+  const lessonRouteMatch = rawCourseRoute.match(/^course-(\d{1,3})-(.+)$/i);
+  const parsedLessonNumber = lessonRouteMatch ? Number(lessonRouteMatch[1]) : 0;
+  const isLessonRoute = !!lessonRouteMatch && parsedLessonNumber >= 1 && parsedLessonNumber <= 110;
+  const routeLessonNumber = isLessonRoute ? parsedLessonNumber : 1;
+  const courseId = isLessonRoute ? `course-${lessonRouteMatch![2]}` : rawCourseRoute;
 
   const [course, setCourse] = useState<Course | null>(null);
   const safeLessons: CourseLesson[] = Array.isArray(course?.lessons) ? course.lessons : [];

@@ -29,11 +29,14 @@ export function FirebaseErrorListener() {
     };
   }, []);
 
-  // On re-render, if an error exists in state, throw it.
-  if (error) {
-    throw error;
-  }
+  // Permission errors are kept local to the Firebase hook that produced them.
+  // Do not throw them from a global component: a single denied optional query
+  // must never replace the whole application with a client-side exception.
+  useEffect(() => {
+    if (error) {
+      console.error("Firestore permission error:", error);
+    }
+  }, [error]);
 
-  // This component renders nothing.
   return null;
 }

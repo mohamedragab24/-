@@ -23,16 +23,10 @@ export function initializeFirebase() {
 }
 
 export function getSdks(firebaseApp: FirebaseApp) {
-  // Reuse an existing Firestore instance when Firebase has already initialized it.
-  // This prevents "failed-precondition" errors after repeated client initialization.
-  let firestore;
-  try {
-    firestore = getFirestore(firebaseApp);
-  } catch {
-    firestore = initializeFirestore(firebaseApp, {
-      experimentalForceLongPolling: true,
-    });
-  }
+  // تفعيل Long Polling لحل مشاكل الاتصال (Timeout)
+  const firestore = initializeFirestore(firebaseApp, {
+    experimentalForceLongPolling: true,
+  });
 
   return {
     firebaseApp,
