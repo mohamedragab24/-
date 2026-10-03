@@ -44,7 +44,7 @@ exports.adminAdjustWallet = onCall(async (request) => {
 
 admin.initializeApp();
 const db = admin.firestore();
-const bucket = admin.storage().bucket();
+const getBucket = () => admin.storage().bucket(); // lazy: لا يكسر النشر لو الـ bucket غير مضبوط
 
 // How long a signed video URL stays valid before the app must ask again.
 const SIGNED_URL_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -107,7 +107,7 @@ exports.getSignedVideoUrl = onCall({ secrets: R2_SECRETS }, async (request) => {
     const signed = presignedUrl({ method: 'GET', key: r2Key, expiresSeconds: Math.floor(SIGNED_URL_TTL_MS / 1000) });
     url = signed.url; expiresAtMs = signed.expiresAtMs;
   } else {
-    const [legacyUrl] = await bucket.file(lesson.storagePath).getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + SIGNED_URL_TTL_MS });
+    const [legacyUrl] = await getBucket().file(lesson.storagePath).getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + SIGNED_URL_TTL_MS });
     url = legacyUrl;
   }
   await db.collection("sessions").add({ uid, courseId, lessonId, issuedAt: admin.firestore.FieldValue.serverTimestamp() });

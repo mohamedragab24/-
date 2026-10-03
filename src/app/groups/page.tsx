@@ -55,11 +55,7 @@ export default function GroupsPage() {
 
   const userRef = useMemoFirebase(() => (firestore && user ? doc(firestore, "users", user.uid) : null), [firestore, user]);
   const { data: profile } = useDoc<any>(userRef);
-  const isMufhem =
-    profile?.role === "mufhem" ||
-    profile?.mode === "mofahhem" ||
-    profile?.role === "admin" ||
-    profile?.isAdmin === true;
+  const isMufhem = profile?.role === "mufhem";
 
   const [publicId, setPublicId] = useState<string>("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -92,20 +88,9 @@ export default function GroupsPage() {
   const estimate = (owned || []).filter((g: any) => g.status === "active").reduce((a: number, g: any) => a + estimateWeeklyFee(g.storageBytes, g.memberCount), 0);
 
   const create = async () => {
-    const cleanName = name.trim();
-    const cleanDesc = desc.trim();
-    if (cleanName.length < 3) {
-      toast({ variant: "destructive", title: "اسم المجموعة غير صحيح", description: "اكتب اسمًا من 3 أحرف على الأقل." });
-      return;
-    }
-    if (!user) {
-      toast({ variant: "destructive", title: "يجب تسجيل الدخول", description: "سجّل الدخول ثم حاول إنشاء المجموعة مرة أخرى." });
-      return;
-    }
     setBusy("create");
     try {
-      const r = await callGroupFn<{ groupId: string }>("createGroup", { name: cleanName, description: cleanDesc });
-      if (!r?.groupId) throw new Error("لم يُرجع الخادم معرف المجموعة.");
+      const r = await callGroupFn<{ groupId: string }>("createGroup", { name, description: desc });
       setCreateOpen(false); setName(""); setDesc("");
       router.push(`/groups/${r.groupId}`);
     } catch (e: any) { toast({ variant: "destructive", title: "تعذر إنشاء المجموعة", description: fnErrorMessage(e) }); }
