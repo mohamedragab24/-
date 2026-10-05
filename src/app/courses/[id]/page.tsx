@@ -174,7 +174,8 @@ export default function CourseDetailPage() {
 
   const activeLesson: CourseLesson | undefined = safeLessons[selectedLessonIndex] || safeLessons[0];
   const activeLessonLocked = isLessonLocked(selectedLessonIndex);
-  const canPlayActiveLesson = !activeLessonLocked && !isEnrolled && Boolean(activeLesson?.isFreePreview);
+  // المعاينة المجانية (الدرس الأول) تعمل للزائر وللمشترك أيضًا؛ المشترك لا يتقيّد بحد الدقيقتين
+  const canPlayActiveLesson = !activeLessonLocked && Boolean(activeLesson?.isFreePreview);
   const isCurrentCompleted = userEnrollment?.completedLessonIds?.includes(activeLesson?.id || "") || false;
 
   const handleToggleLessonComplete = () => {
@@ -276,15 +277,15 @@ export default function CourseDetailPage() {
                   studentEmail={currentUserEmail}
                   studentId={currentUserId}
                   isCompleted={false}
-                  previewLimitSeconds={120}
+                  previewLimitSeconds={isEnrolled || isInstructor ? undefined : 120}
                 />
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between text-right gap-4">
+                {!isEnrolled && <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between text-right gap-4">
                   <div className="space-y-0.5">
                     <h5 className="font-black text-amber-900 text-sm">معاينة مجانية لمدة دقيقتين</h5>
                     <p className="text-xs text-amber-700 font-bold">المشاهدة الكاملة لجميع الحلقات متاحة داخل تطبيق Fahimt بعد تسجيل الدخول بالحساب المشتري.</p>
                   </div>
                   <Button onClick={() => setPurchaseOpen(true)} className="bg-primary text-white font-black text-xs h-10 px-5 rounded-xl shrink-0">شراء الكورس ({course.price} ج.م)</Button>
-                </div>
+                </div>}
               </div>
             ) : (
               <div className="relative aspect-video rounded-3xl overflow-hidden bg-zinc-950 border-4 border-zinc-800 shadow-2xl flex flex-col items-center justify-center p-8 text-center text-white space-y-5">

@@ -90,9 +90,9 @@ const purchasedByUser: Record<string, Set<string>> = {};
 export async function syncPurchasedCourses(db: any, uid?: string | null): Promise<void> {
   if (!db || !uid) return;
   try {
-    const { getFunctions, httpsCallable } = await import("firebase/functions");
-    const { getApp } = await import("firebase/app");
-    const functions = getFunctions(getApp(), "us-central1");
+    // الدوال تعمل على Vercel عبر /api/fn (وليس Cloud Functions) — لذلك نستخدم fn-client وليس firebase/functions
+    const { getFunctions, httpsCallable } = await import("./fn-client");
+    const functions = getFunctions(undefined, "us-central1");
     const callable = httpsCallable(functions, "getMyPurchasedCourseIds");
     const result: any = await callable({});
     const ids = new Set<string>((result?.data?.courseIds || []).map((v: any) => String(v)));

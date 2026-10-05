@@ -41,6 +41,13 @@ interface CoursePurchaseDialogProps {
   onPurchaseSuccess?: () => void;
 }
 
+/** يوحّد حسابات الاستقبال: accounts[] الجديدة أو accountNumber القديمة */
+const accountsOf = (m: any): { label: string; number: string }[] => {
+  const list = Array.isArray(m?.accounts) ? m.accounts.map((a: any) => ({ label: String(a?.label || ""), number: String(a?.number || "") })).filter((a: any) => a.number) : [];
+  if (!list.length && m?.accountNumber) list.push({ label: "", number: String(m.accountNumber) });
+  return list;
+};
+
 export function CoursePurchaseDialog({
   open,
   onOpenChange,
@@ -68,7 +75,7 @@ export function CoursePurchaseDialog({
     return ["deposit", "earning", "refund"].includes(String(tx.type || "")) ? acc + n : acc - n;
   }, 0);
 
-  const [paymentMethod, setPaymentMethod] = useState<"balance" | "vodafone_cash" | "orange_cash" | "etisalat_cash" | "we_pay" | "instapay" | "bank_transfer">("balance");
+  const [paymentMethod, setPaymentMethod] = useState<string>("balance");
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentPhone, setPaymentPhone] = useState("");
   const [walletBalance, setWalletBalance] = useState(Number(currentBalance ?? 0));
@@ -135,9 +142,12 @@ export function CoursePurchaseDialog({
       if (!result.data?.ok) throw new Error("purchase_failed");
       try { const fb = initializeFirebase(); await syncPurchasedCourses(fb.firestore, fb.auth?.currentUser?.uid); } catch (_) {}
       setIsProcessing(false);
+      const pending = result.data?.pending === true;
       toast({
-        title: "تم شراء الكورس بنجاح!",
-        description: paymentMethod === "balance" ? "تم خصم المبلغ من المحفظة وتسجيل العملية." : "تم تأكيد العملية وتفعيل الكورس في كورساتي."
+        title: pending ? "تم تسجيل الطلب" : "تم شراء الكورس بنجاح!",
+        description: pending
+          ? "حوّل المبلغ الآن إلى الرقم الظاهر، وسيتم تأكيد العملية تلقائيًا بمجرد وصولها."
+          : paymentMethod === "balance" ? "تم خصم المبلغ من المحفظة وتسجيل العملية." : "تم تأكيد العملية وتفعيل الكورس في كورساتي."
       });
       onOpenChange(false);
       if (onPurchaseSuccess) onPurchaseSuccess();
@@ -249,33 +259,37 @@ export function CoursePurchaseDialog({
                 {paymentMethods.map((method:any) => (
                   <div key={method.id} onClick={() => setPaymentMethod(method.id as any)} className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${paymentMethod === method.id ? "border-primary bg-primary/5 shadow-sm" : "border-zinc-200 hover:border-zinc-300"}`}>
                     <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">{method.name}</span><CreditCard className="w-5 h-5 text-zinc-400" /></div>
-                    <p className="text-xs text-zinc-500 font-bold">{method.accountNumber || "وسيلة دفع إلكترونية"}</p>
+                    <p className="text-xs text-zinc-500 font-bold">{accountsOf(method).length > 1 ? `${accountsOf(method).length} خيارات للتحويل` : (accountsOf(method)[0]?.label || "وسيلة دفع إلكترونية")}</p>
                   </div>
                 ))}
-                {paymentMethods.length === 0 && [
-                  ["vodafone_cash", "فودافون كاش"], ["orange_cash", "أورنج كاش"], ["etisalat_cash", "اتصالات كاش"],
-                  ["we_pay", "وي باي"], ["instapay", "إنستا باي"], ["bank_transfer", "تحويل بنكي"]
-                ].map(([value,label]) => (
-                  <div key={value} onClick={() => setPaymentMethod(value as any)} className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${paymentMethod === value ? "border-primary bg-primary/5 shadow-sm" : "border-zinc-200 hover:border-zinc-300"}`}>
-                    <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">{label}</span><CreditCard className="w-5 h-5 text-zinc-400" /></div>
-                    <p className="text-xs text-zinc-500 font-bold">طريقة دفع خارجية</p>
-                  </div>
-                ))}
+                {paymentMethods.length === 0 && (
+                  <p className="col-span-full text-xs font-bold text-amber-700 bg-amber-50 p-3 rounded-xl">لا توجد وسائل دفع إلكترونية مفعّلة حاليًا. يمكنك الدفع من محفظة فهمت.</p>
+                )}
               </div>
               {paymentMethod !== "balance" && (
                 <div className="mt-3 space-y-3 p-4 rounded-2xl bg-amber-50 border border-amber-100">
                   {(() => {
-                    const selected = paymentMethods.find((m:any) => m.id === paymentMethod);
-                    return selected?.accountNumber ? (
-                      <div className="p-3 rounded-xl bg-white border text-center">
-                        <p className="text-xs text-zinc-500 font-bold mb-1">رقم الحساب الذي سيتم التحويل إليه</p>
-                        <p className="text-xl font-black tracking-widest text-primary" dir="ltr">{selected.accountNumber}</p>
+                    const selected = paymentMethods.find((m: any) => m.id === paymentMethod);
+                    const accs = accountsOf(selected);
+                    if (!accs.length) return null;
+                    return (
+                      <div className="space-y-2">
+                        <p className="text-xs text-zinc-600 font-bold text-center">حوّل مبلغ <span className="text-primary">{course.price} ج.م</span> إلى أحد الأرقام التالية:</p>
+                        {accs.map((a, i) => (
+                          <div key={i} className="p-3 rounded-xl bg-white border flex items-center justify-between gap-3">
+                            <span className="text-sm font-black text-zinc-800">{a.label || selected?.name}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg font-black tracking-widest text-primary" dir="ltr">{a.number}</span>
+                              <Button type="button" size="sm" variant="outline" className="h-8 rounded-lg text-xs font-bold" onClick={() => { try { navigator.clipboard?.writeText(a.number); toast({ title: "تم نسخ الرقم" }); } catch (_) {} }}>نسخ</Button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ) : null;
+                    );
                   })()}
                   <div><label htmlFor="payment-phone" className="text-sm font-bold text-zinc-700">رقم الحساب/الهاتف الذي تم الدفع منه *</label><input id="payment-phone" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={e => setPaymentPhone(e.target.value)} placeholder="01xxxxxxxxx" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" />
                     <p className="text-xs text-zinc-500 mt-1">اكتب الرقم الذي تم التحويل منه فقط، ولا نطلب اسم صاحب المحفظة.</p></div>
-                  <p className="text-xs text-emerald-700 bg-emerald-50 p-3 rounded-xl">بعد إدخال رقم الدفع يتم تأكيد العملية وتفعيل الكورس تلقائيًا.</p>
+                  <p className="text-xs text-emerald-700 bg-emerald-50 p-3 rounded-xl">اضغط «تأكيد الشراء» أولًا ثم حوّل المبلغ بالضبط من الرقم المكتوب أعلاه؛ يتم التأكيد وتفعيل الكورس تلقائيًا بمجرد وصول العملية.</p>
                 </div>
               )}
             </div>
@@ -312,7 +326,7 @@ export function CoursePurchaseDialog({
                 disabled={isProcessing || (paymentMethod !== "balance" && paymentPhone.trim().replace(/[^\d+]/g, "").length < 8) || (paymentMethod === "balance" && walletBalance < Number(course.price || 0))}
                 className="bg-primary hover:bg-primary/90 text-white font-black rounded-xl px-8 h-12 text-base gap-2"
               >
-                {isProcessing ? "جارٍ إتمام الدفع..." : `تأكيد الشراء (${course.price} ج.م)`}
+                {isProcessing ? "جارٍ تسجيل الطلب..." : `تأكيد الشراء (${course.price} ج.م)`}
                 <ArrowLeft className="w-4 h-4" />
               </Button>
             </DialogFooter>

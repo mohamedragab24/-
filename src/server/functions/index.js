@@ -4,6 +4,14 @@ const admin = require("firebase-admin");
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { presignedUrl, putObject } = require('./r2');
+const { tryConfirmPayment, phoneKey } = require('./payment-verify');
+/** يوحّد شكل حسابات الاستقبال: accounts[] الجديدة أو accountNumber القديمة */
+const methodAccounts = (m) => {
+  const list = Array.isArray(m?.accounts) ? m.accounts : [];
+  const out = list.map((a) => ({ label: String(a?.label || ''), number: String(a?.number || '') })).filter((a) => a.number);
+  if (!out.length && m?.accountNumber) out.push({ label: String(m.name || ''), number: String(m.accountNumber) });
+  return out;
+};
 const R2_SECRETS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'];
 const R2_PUBLIC_BASE = process.env.R2_PUBLIC_BASE_URL || 'https://fahmny-r2.mohamedragabewiess.workers.dev';
 const entitlementKey = (uid, courseId) => crypto.createHash('sha256').update(`${uid}:${courseId}`).digest('hex');
@@ -287,9 +295,17 @@ exports.purchaseCourse = onCall(async (request) => {
     };
 
     if (paymentMethod !== 'balance') {
-      await paymentRef.set({ ...common, status: 'completed', paymentMethod, paymentAccount: dynamicMethod?.accountNumber || '', completedAt: now });
-      await purchaseRef.set({ uid, courseId, status: 'completed', amountPaid: amount, paymentId: paymentRef.id, orderNumber, paymentMethod, paymentPhone: phone, source: common.source, purchasedAt: now, updatedAt: now }, { merge: true });
-      return { ok: true, pending: false, paymentId: paymentRef.id, orderNumber, amountPaid: amount };
+      // الدفع الخارجي: لا يُفعَّل الكورس إلا بعد التحقق من عملية حقيقية وصلت عبر بوت تليجرام.
+      const accounts = dynamicMethod ? methodAccounts(dynamicMethod) : [];
+      await paymentRef.set({
+        ...common, status: 'pending_verification', paymentMethod,
+        paymentMethodName: String(dynamicMethod?.name || paymentMethod),
+        paymentAccounts: accounts, paymentPhoneKey: phoneKey(phone),
+      });
+      // لو كانت العملية وصلت للبوت بالفعل نؤكد فورًا
+      let status = 'pending_verification';
+      try { status = (await tryConfirmPayment(paymentRef.id)).status; } catch (e) { console.error('instant verify failed', e); }
+      return { ok: true, pending: status !== 'completed', status, paymentId: paymentRef.id, orderNumber, amountPaid: amount };
     }
 
     await db.runTransaction(async (tx) => {
@@ -321,6 +337,18 @@ exports.purchaseCourse = onCall(async (request) => {
     console.error('purchaseCourse failed', e);
     throw new HttpsError('internal', `تعذر إتمام الشراء: ${String(e?.message || e).slice(0, 180)}`);
   }
+});
+
+/** يعيد محاولة مطابقة الطلب المعلّق مع عمليات البوت (تستدعيها صفحة إتمام الطلب كل بضع ثوانٍ). */
+exports.checkPaymentStatus = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  const paymentId = String(request.data?.paymentId || '').trim();
+  if (!paymentId) throw new HttpsError('invalid-argument', 'رقم الطلب مطلوب');
+  const snap = await db.collection('payments').doc(paymentId).get();
+  if (!snap.exists || snap.data()?.uid !== uid) throw new HttpsError('not-found', 'الطلب غير موجود');
+  const result = await tryConfirmPayment(paymentId);
+  return { ok: true, status: result.status };
 });
 
 /** Firebase-first purchase check with R2 disaster-recovery fallback. */
