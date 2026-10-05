@@ -12,8 +12,8 @@ const admin = require('firebase-admin');
 const getDb = () => admin.firestore();
 const FV = () => admin.firestore.FieldValue;
 
-// عدد دقائق السماح قبل وقت الطلب (الافتراضي 0 = لا تُقبل عملية قبل وقت الطلب)
-const GRACE_MINUTES = Number(process.env.PAYMENT_MATCH_GRACE_MINUTES || 0);
+// عدد دقائق السماح قبل وقت الطلب (الافتراضي 10: يتحمل فرق ساعة الجوال عن الخادم ويمنع رسائل قديمة جدًا)
+const GRACE_MINUTES = Number(process.env.PAYMENT_MATCH_GRACE_MINUTES || 10);
 // مدة صلاحية الطلب المعلّق بالدقائق
 const ORDER_TTL_MINUTES = Number(process.env.PAYMENT_ORDER_TTL_MINUTES || 180);
 
@@ -86,16 +86,18 @@ function parsePaymentMessage(text, fallbackDateMs) {
   if (idMatch) out.txId = idMatch[1];
 
   // التاريخ والوقت  (dd-mm-yy HH:mm) أو (dd/mm/yyyy HH:mm) أو (yyyy-mm-dd HH:mm)
-  let m = t.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[\sT,،]+(\d{1,2}):(\d{2})/);
-  let y, mo, d, h, mi;
-  if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; h = +m[4]; mi = +m[5]; }
+  // ملاحظة: علامة ص/م تُقرأ فقط إذا كانت ملاصقة للوقت وليست بداية كلمة (مثل "من") وإلا تتحول الساعة خطأً إلى PM
+  const MER = '(?::\\d{2})?\\s*(ص|م|AM|PM|am|pm)?(?![\\u0621-\\u064AA-Za-z])';
+  let m = t.match(new RegExp('(\\d{4})[-/.](\\d{1,2})[-/.](\\d{1,2})[\\sT,،]+(\\d{1,2}):(\\d{2})' + MER));
+  let y, mo, d, h, mi, mer = '';
+  if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; h = +m[4]; mi = +m[5]; mer = m[6] || ''; }
   else {
-    m = t.match(/(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})[\sT,،]+(\d{1,2}):(\d{2})/);
-    if (m) { d = +m[1]; mo = +m[2]; y = +m[3]; if (y < 100) y += 2000; h = +m[4]; mi = +m[5]; }
+    m = t.match(new RegExp('(\\d{1,2})[-/.](\\d{1,2})[-/.](\\d{2,4})[\\sT,،]+(\\d{1,2}):(\\d{2})' + MER));
+    if (m) { d = +m[1]; mo = +m[2]; y = +m[3]; if (y < 100) y += 2000; h = +m[4]; mi = +m[5]; mer = m[6] || ''; }
   }
   if (y) {
     // صيغة 12 ساعة
-    const pm = /(?:\d{1,2}:\d{2})\s*(?:م|PM|pm)/.test(t), am = /(?:\d{1,2}:\d{2})\s*(?:ص|AM|am)/.test(t);
+    const pm = /^(م|PM|pm)$/.test(mer), am = /^(ص|AM|am)$/.test(mer);
     if (pm && h < 12) h += 12;
     if (am && h === 12) h = 0;
     out.timeMs = cairoLocalToUtcMs(y, mo, d, h, mi);
