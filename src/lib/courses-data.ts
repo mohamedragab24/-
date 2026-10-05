@@ -90,10 +90,12 @@ const purchasedByUser: Record<string, Set<string>> = {};
 export async function syncPurchasedCourses(db: any, uid?: string | null): Promise<void> {
   if (!db || !uid) return;
   try {
-    const { collection, getDocs, query, where } = await import("firebase/firestore");
-    const snap = await getDocs(query(collection(db, "purchases"), where("uid", "==", uid), where("status", "==", "completed")));
-    const ids = new Set<string>();
-    snap.forEach((d: any) => { const c = String(d.data()?.courseId || ""); if (c) ids.add(c); });
+    const { getFunctions, httpsCallable } = await import("firebase/functions");
+    const { getApp } = await import("firebase/app");
+    const functions = getFunctions(getApp(), "us-central1");
+    const callable = httpsCallable(functions, "getMyPurchasedCourseIds");
+    const result: any = await callable({});
+    const ids = new Set<string>((result?.data?.courseIds || []).map((v: any) => String(v)));
     purchasedByUser[uid] = ids;
     if (typeof window !== "undefined") window.dispatchEvent(new Event("fahimt_enrollments_updated"));
   } catch (e) {

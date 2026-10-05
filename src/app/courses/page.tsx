@@ -12,7 +12,6 @@ import {
   DollarSign, 
   TrendingUp, 
   Edit3, 
-  Trash2, 
   Eye, 
   EyeOff, 
   Clock, 
@@ -41,7 +40,6 @@ import { Course, CourseEnrollment } from "@/lib/types";
 import { 
   getStoredCourses, 
   getStoredEnrollments, 
-  deleteCourse, 
   upsertCourse,
   isUserEnrolled 
 } from "@/lib/courses-data";
@@ -92,7 +90,6 @@ export default function CoursesPage() {
 
   const [purchaseOpen, setPurchaseOpen] = useState(false);
   const [courseToPurchase, setCourseToPurchase] = useState<Course | null>(null);
-  const [courseToDelete, setCourseToDelete] = useState<Course | null>(null);
 
   const refreshData = async () => {
     try {
@@ -153,9 +150,6 @@ export default function CoursesPage() {
     refreshData();
   };
 
-  const handleDeleteCourse = (course: Course) => {
-    setCourseToDelete(course);
-  };
 
   // Filtered public courses (for student browsing)
   const publicCourses = courses.filter(c => {
@@ -631,15 +625,6 @@ export default function CoursesPage() {
                         تعديل الكورس
                       </Button>
 
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDeleteCourse(course)}
-                        className="text-red-500 hover:bg-red-50 hover:text-red-600 h-10 w-10 rounded-xl cursor-pointer"
-                        title="حذف هذا الكورس"
-                      >
-                        <Trash2 size={16} />
-                      </Button>
                     </div>
                   </div>
                 ))}
@@ -647,53 +632,6 @@ export default function CoursesPage() {
             )}
           </TabsContent>
         </Tabs>
-
-        {/* نافذة تأكيد حذف الكورس */}
-        <Dialog open={!!courseToDelete} onOpenChange={(open) => !open && setCourseToDelete(null)}>
-          <DialogContent className="rounded-3xl p-6 text-right max-w-md bg-white dark:bg-zinc-900 border-2" dir="rtl">
-            <DialogHeader className="text-right space-y-2">
-              <DialogTitle className="text-xl font-black text-red-600 flex items-center gap-2">
-                <Trash2 className="w-5 h-5 text-red-600" />
-                تأكيد حذف الكورس
-              </DialogTitle>
-              <DialogDescription className="text-sm font-bold text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                هل أنت متأكد من حذف كورس &ldquo;{courseToDelete?.title}&rdquo; نهائياً؟ سيتم مسح الكورس ودروسه فوراً ولن يظهر بعد الآن.
-              </DialogDescription>
-            </DialogHeader>
-
-            <DialogFooter className="flex gap-2 justify-end pt-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setCourseToDelete(null)}
-                className="rounded-xl font-bold cursor-pointer"
-              >
-                تراجع
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={() => {
-                  if (courseToDelete) {
-                    const idToDelete = courseToDelete.id;
-                    deleteCourse(idToDelete);
-                    setCourses((prev) => prev.filter((c) => c.id !== idToDelete));
-                    setCourseToDelete(null);
-                    toast({
-                      title: "تم حذف الكورس بنجاح",
-                      description: "تمت إزالة الكورس نهائياً من لوحتك ومن المنصة."
-                    });
-                    refreshData();
-                  }
-                }}
-                className="rounded-xl font-black bg-red-600 hover:bg-red-700 text-white gap-2 cursor-pointer shadow-md"
-              >
-                <Trash2 className="w-4 h-4" />
-                نعم، احذف الكورس الآن
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
 
         {/* حوارات الإدارة والشراء */}
         <CourseEditorDialog

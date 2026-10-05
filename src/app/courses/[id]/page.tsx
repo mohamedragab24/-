@@ -40,7 +40,9 @@ import { ProtectedVideoPlayer } from "@/components/courses/protected-video-playe
 import { CoursePurchaseDialog } from "@/components/courses/course-purchase-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useFirebase, useFirestore, useDoc, useMemoFirebase, useCollection } from "@/firebase";
-import { doc, collection, getDoc } from "firebase/firestore";
+import { doc, collection } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
+import { initializeFirebase } from "@/firebase";
 
 export default function CourseDetailPage() {
   const params = useParams();
@@ -82,10 +84,12 @@ export default function CourseDetailPage() {
     if (!found) found = (await fetchCourseRemote(courseId, firestore)) || undefined;
     setCourse(found || null);
     let enrolled = false;
-    if (firestore && user?.uid) {
+    if (user?.uid) {
       try {
-        const purchaseSnap = await getDoc(doc(firestore, 'purchases', `${user.uid}_${courseId}`));
-        enrolled = purchaseSnap.exists() && purchaseSnap.data()?.status === 'completed';
+        const { firebaseApp } = initializeFirebase();
+        const callable = httpsCallable(getFunctions(firebaseApp, "us-central1"), "checkCourseAccess");
+        const result: any = await callable({ courseId });
+        enrolled = result?.data?.purchased === true;
       } catch (_) {
         enrolled = false;
       }

@@ -126,7 +126,7 @@ export function CoursePurchaseDialog({
       });
       onOpenChange(false);
       if (onPurchaseSuccess) onPurchaseSuccess();
-      router.push(`/order-complete?paymentId=${encodeURIComponent(result.data.paymentId)}&pending=0`);
+      router.push(`/courses/${course.id}`);
     } catch (error: any) {
       console.error("purchaseCourse failed", error);
       setIsProcessing(false);

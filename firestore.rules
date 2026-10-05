@@ -175,15 +175,19 @@ service cloud.firestore {
         )
       );
 
-      allow update, delete: if isAdmin() || (
+      allow update: if isAdmin() || (
         isSignedIn() &&
         request.auth.uid == resource.data.instructorId &&
+        request.resource.data.instructorId == resource.data.instructorId &&
         (
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "mufhem" ||
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.mode == "mofahhem" ||
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "teacher"
         )
       );
+
+      // حذف الكورس من لوحة الإدارة فقط؛ المفهم يمكنه التعديل/الإخفاء وليس الحذف النهائي.
+      allow delete: if isAdmin();
 
       match /lessons/{lessonId} {
         allow read: if true;

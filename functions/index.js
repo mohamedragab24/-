@@ -28,7 +28,21 @@ exports.adminAdjustWallet = onCall(async (request) => {
     const userSnap = await tx.get(userRef);
     if (!userSnap.exists) throw new HttpsError('not-found', 'المستخدم غير موجود');
     const walletSnap = await tx.get(walletRef);
-    const current = Number(walletSnap.data()?.balance ?? 0);
+    let current = Number(walletSnap.data()?.balance);
+    // Older versions wrote deposits only to the transaction ledger.
+    // If the authoritative wallet document does not exist yet, bootstrap it
+    // from that ledger instead of resetting the user's balance to zero.
+    if (!Number.isFinite(current)) {
+      current = 0;
+      const ledgerSnap = await tx.get(userRef.collection('transactions'));
+      ledgerSnap.forEach((d) => {
+        const t = d.data() || {};
+        if (['rejected', 'pending', 'cancelled'].includes(String(t.status || ''))) return;
+        const n = Number(t.amount || 0);
+        if (['deposit', 'earning', 'refund'].includes(String(t.type || ''))) current += n;
+        else current -= n;
+      });
+    }
     const next = action === 'deposit' ? current + amount : current - amount;
     if (action === 'withdrawal' && next < -0.0001) throw new HttpsError('failed-precondition', 'رصيد المستخدم غير كافٍ');
     newBalance = Math.round(next * 100) / 100;
