@@ -7,27 +7,29 @@ import { Button } from "@/components/ui/button";
 
 export default function OrderCompletePage() {
   const [paymentId, setPaymentId] = useState("");
-  useEffect(() => { setPaymentId(new URLSearchParams(window.location.search).get("paymentId") || ""); }, []);
+  const [paramsRead, setParamsRead] = useState(false);
+  useEffect(() => { setPaymentId(new URLSearchParams(window.location.search).get("paymentId") || ""); setParamsRead(true); }, []);
   const [payment, setPayment] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const { user } = useFirebase();
+  const { user, isUserLoading } = useFirebase();
   const firestore = useFirestore();
   useEffect(() => {
+    // ننتظر قراءة الرابط وتحميل حالة تسجيل الدخول قبل أي رسالة خطأ
+    if (!paramsRead || isUserLoading || !firestore) return;
+    if (!paymentId) { setLoading(false); setError("تعذر العثور على بيانات الطلب."); return; }
+    if (!user) { setLoading(false); setError("سجّل الدخول لعرض الإيصال."); return; }
     let active = true;
-    let unsubscribe: (() => void) | undefined;
-    (async () => {
-      if (!user || !firestore || !paymentId) { setLoading(false); setError("تعذر العثور على بيانات الطلب."); return; }
-      unsubscribe = onSnapshot(doc(firestore, "payments", paymentId), (snap) => {
-        if (!active) return;
-        if (!snap.exists() || snap.data().uid !== user.uid) {
-          setError("الطلب غير موجود أو لا يخص حسابك."); setLoading(false); return;
-        }
-        setPayment({ id: snap.id, ...snap.data() }); setLoading(false);
-      }, (e) => { if (active) { setError(e?.message || "تعذر تحميل الإيصال."); setLoading(false); } });
-    })();
-    return () => { active = false; unsubscribe?.(); };
-  }, [user, firestore, paymentId]);
+    setLoading(true); setError("");
+    const unsubscribe = onSnapshot(doc(firestore, "payments", paymentId), (snap) => {
+      if (!active) return;
+      if (!snap.exists() || snap.data().uid !== user.uid) {
+        setPayment(null); setError("الطلب غير موجود أو لا يخص حسابك."); setLoading(false); return;
+      }
+      setError(""); setPayment({ id: snap.id, ...snap.data() }); setLoading(false);
+    }, (e) => { if (active) { setError(e?.message || "تعذر تحميل الإيصال."); setLoading(false); } });
+    return () => { active = false; unsubscribe(); };
+  }, [user, isUserLoading, firestore, paymentId, paramsRead]);
   return <main dir="rtl" className="min-h-screen bg-slate-50 p-4 flex items-center justify-center"><section className="w-full max-w-xl rounded-3xl bg-white p-6 md:p-9 shadow-lg border space-y-5">
     <div className="text-center border-b pb-5"><img src="/favicon.ico" alt="شعار فهّمني" className="mx-auto h-12 w-12 object-contain" /><div className="text-2xl font-black text-primary">فهّمني</div><p className="text-sm text-slate-500 mt-2">إيصال الطلب</p></div>
     {loading ? <p className="text-center py-10">جارٍ تحميل بيانات الطلب…</p> : error ? <p className="text-center text-red-600 py-8">{error}</p> : payment ? <>
