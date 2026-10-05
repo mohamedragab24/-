@@ -131,6 +131,11 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
+
+    match /paymentMethods/{methodId} {
+      allow read: if isAdmin() || resource.data.active == true;
+      allow create, update, delete: if isAdmin();
+    }
     
     // الأقسام والتصنيفات
     match /categories/{id} { 

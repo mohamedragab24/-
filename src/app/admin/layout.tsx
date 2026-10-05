@@ -10,7 +10,7 @@ import {
   FileCheck, ShieldCheck, MessageSquare, Image as ImageIcon, 
   Layers, Filter, Palette, Share2, ClipboardList, Video, 
   History, Download, Ticket, CloudUpload, Bot, Bug, Lock, 
-  Fingerprint, Scale, Archive, GraduationCap, Bell, BookOpen
+  Fingerprint, Scale, Archive, GraduationCap, Bell, BookOpen, WalletCards
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -64,6 +64,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       title: "المالية والترويج",
       items: [
         { label: "إدارة المالية", href: "/admin/finance", icon: BadgeCent },
+        { label: "إدارة المحافظ", href: "/admin/payment-methods", icon: WalletCards },
         { label: "الكوبونات", href: "/admin/coupons", icon: Ticket },
       ]
     },

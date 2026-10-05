@@ -51,9 +51,10 @@ function WalletContent() {
     if (tx.type === 'deposit' || tx.type === 'earning' || tx.type === 'refund') return acc + n;
     return acc - n;
   }, 0) || 0;
+  const legacyBalance = Number(profile?.balance);
   const balance = Number.isFinite(Number(walletDoc?.balance))
     ? Number(walletDoc.balance)
-    : ledgerBalance;
+    : (Number.isFinite(legacyBalance) ? legacyBalance : ledgerBalance);
 
   const handleTransaction = async () => {
     if (!firestore || !user || !amount || !profile) return;

@@ -24,7 +24,7 @@ import { Course } from "@/lib/types";
 import { isUserEnrolled, syncPurchasedCourses } from "@/lib/courses-data";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { getAuth } from "firebase/auth";
-import { doc, getDoc, getFirestore } from "firebase/firestore";
+import { collection, doc, getDocs, getDoc, getFirestore, query, where } from "firebase/firestore";
 import { initializeFirebase } from "@/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
@@ -56,8 +56,8 @@ export function CoursePurchaseDialog({
   const [paymentMethod, setPaymentMethod] = useState<"balance" | "vodafone_cash" | "orange_cash" | "etisalat_cash" | "we_pay" | "instapay" | "bank_transfer">("balance");
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentPhone, setPaymentPhone] = useState("");
-  const [accountHolderName, setAccountHolderName] = useState("");
   const [walletBalance, setWalletBalance] = useState(Number(currentBalance ?? 0));
+  const [paymentMethods, setPaymentMethods] = useState<any[]>([]);
   useEffect(() => {
     if (typeof currentBalance === "number") setWalletBalance(currentBalance);
   }, [currentBalance]);
@@ -67,12 +67,19 @@ export function CoursePurchaseDialog({
     (async () => {
       try {
         const { firebaseApp } = initializeFirebase();
+        const fs = getFirestore(firebaseApp);
+        const methodsSnap = await getDocs(query(collection(fs, "paymentMethods"), where("active", "==", true)));
+        const methods = methodsSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a:any,b:any) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+        if (active) setPaymentMethods(methods);
         const uid = getAuth(firebaseApp).currentUser?.uid;
         if (!uid) { if (active && currentBalance == null) setWalletBalance(0); return; }
-        const walletSnap = await getDoc(doc(getFirestore(firebaseApp), "wallets", uid));
+        const walletSnap = await getDoc(doc(fs, "wallets", uid));
+        const userSnap = await getDoc(doc(fs, "users", uid));
         const storedBalance = walletSnap.exists() ? Number(walletSnap.data()?.balance) : NaN;
-        if (Number.isFinite(storedBalance)) {
-          if (active) setWalletBalance(Math.round(storedBalance * 100) / 100);
+        const legacyBalance = userSnap.exists() ? Number(userSnap.data()?.balance) : NaN;
+        const recognizedBalance = Number.isFinite(storedBalance) ? storedBalance : legacyBalance;
+        if (Number.isFinite(recognizedBalance)) {
+          if (active) setWalletBalance(Math.round(recognizedBalance * 100) / 100);
         } else if (active) {
           setWalletBalance(0);
         }
@@ -110,7 +117,7 @@ export function CoursePurchaseDialog({
       const { firebaseApp } = initializeFirebase();
       const functions = getFunctions(firebaseApp, "us-central1");
       const purchaseCourse = httpsCallable(functions, "purchaseCourse");
-      const result: any = await purchaseCourse({ courseId: course.id, source: "web", paymentMethod, phone: paymentPhone.trim(), accountHolderName: accountHolderName.trim() });
+      const result: any = await purchaseCourse({ courseId: course.id, source: "web", paymentMethod, phone: paymentPhone.trim() });
       if (!result.data?.ok) throw new Error("purchase_failed");
       try { const fb = initializeFirebase(); await syncPurchasedCourses(fb.firestore, fb.auth?.currentUser?.uid); } catch (_) {}
       setIsProcessing(false);
@@ -220,26 +227,40 @@ export function CoursePurchaseDialog({
               <h5 className="font-black text-sm text-zinc-800">طريقة الدفع:</h5>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {[
-                  ["balance", "محفظة فهمت", `الرصيد المتاح: ${walletBalance} ج.م`],
-                  ["vodafone_cash", "فودافون كاش", "محفظة إلكترونية"],
-                  ["orange_cash", "أورنج كاش", "محفظة إلكترونية"],
-                  ["etisalat_cash", "اتصالات كاش", "محفظة إلكترونية"],
-                  ["we_pay", "وي باي", "محفظة إلكترونية"],
-                  ["instapay", "إنستا باي", "تحويل فوري"],
-                  ["bank_transfer", "تحويل بنكي", "تحويل بنكي"]
-                ].map(([value, label, hint]) => (
+                <div onClick={() => setPaymentMethod("balance" as any)} className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${paymentMethod === "balance" ? "border-primary bg-primary/5 shadow-sm" : "border-zinc-200 hover:border-zinc-300"}`}>
+                  <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">محفظة فهمت</span><Wallet className="w-5 h-5 text-primary" /></div>
+                  <p className="text-xs text-zinc-500 font-bold">الرصيد المتاح: {walletBalance} ج.م</p>
+                </div>
+                {paymentMethods.map((method:any) => (
+                  <div key={method.id} onClick={() => setPaymentMethod(method.id as any)} className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${paymentMethod === method.id ? "border-primary bg-primary/5 shadow-sm" : "border-zinc-200 hover:border-zinc-300"}`}>
+                    <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">{method.name}</span><CreditCard className="w-5 h-5 text-zinc-400" /></div>
+                    <p className="text-xs text-zinc-500 font-bold">{method.accountNumber || "وسيلة دفع إلكترونية"}</p>
+                  </div>
+                ))}
+                {paymentMethods.length === 0 && [
+                  ["vodafone_cash", "فودافون كاش"], ["orange_cash", "أورنج كاش"], ["etisalat_cash", "اتصالات كاش"],
+                  ["we_pay", "وي باي"], ["instapay", "إنستا باي"], ["bank_transfer", "تحويل بنكي"]
+                ].map(([value,label]) => (
                   <div key={value} onClick={() => setPaymentMethod(value as any)} className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${paymentMethod === value ? "border-primary bg-primary/5 shadow-sm" : "border-zinc-200 hover:border-zinc-300"}`}>
-                    <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">{label}</span>{value === "balance" ? <Wallet className="w-5 h-5 text-primary" /> : <CreditCard className="w-5 h-5 text-zinc-400" />}</div>
-                    <p className="text-xs text-zinc-500 font-bold">{hint}</p>
+                    <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">{label}</span><CreditCard className="w-5 h-5 text-zinc-400" /></div>
+                    <p className="text-xs text-zinc-500 font-bold">طريقة دفع خارجية</p>
                   </div>
                 ))}
               </div>
               {paymentMethod !== "balance" && (
-                <div className="mt-3 space-y-3">
-                  <div><label htmlFor="payment-phone" className="text-sm font-bold text-zinc-700">رقم الحساب/الهاتف الذي تم الدفع منه *</label><input id="payment-phone" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={e => setPaymentPhone(e.target.value)} placeholder="01xxxxxxxxx" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" /></div>
-                  <div><label htmlFor="account-holder" className="text-sm font-bold text-zinc-700">اسم صاحب الحساب *</label><input id="account-holder" value={accountHolderName} onChange={e => setAccountHolderName(e.target.value)} placeholder="الاسم كما هو في وسيلة الدفع" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" /></div>
-                  <p className="text-xs text-amber-700 bg-amber-50 p-3 rounded-xl">سيتم إنشاء الطلب كمعلّق، ولا يفتح الكورس إلا بعد تأكيد الإدارة لتحصيل المبلغ.</p>
+                <div className="mt-3 space-y-3 p-4 rounded-2xl bg-amber-50 border border-amber-100">
+                  {(() => {
+                    const selected = paymentMethods.find((m:any) => m.id === paymentMethod);
+                    return selected?.accountNumber ? (
+                      <div className="p-3 rounded-xl bg-white border text-center">
+                        <p className="text-xs text-zinc-500 font-bold mb-1">رقم الحساب الذي سيتم التحويل إليه</p>
+                        <p className="text-xl font-black tracking-widest text-primary" dir="ltr">{selected.accountNumber}</p>
+                      </div>
+                    ) : null;
+                  })()}
+                  <div><label htmlFor="payment-phone" className="text-sm font-bold text-zinc-700">رقم الحساب/الهاتف الذي تم الدفع منه *</label><input id="payment-phone" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={e => setPaymentPhone(e.target.value)} placeholder="01xxxxxxxxx" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" />
+                    <p className="text-xs text-zinc-500 mt-1">اكتب الرقم الذي تم التحويل منه فقط، ولا نطلب اسم صاحب المحفظة.</p></div>
+                  <p className="text-xs text-emerald-700 bg-emerald-50 p-3 rounded-xl">بعد إدخال رقم الدفع يتم تأكيد العملية وتفعيل الكورس تلقائيًا.</p>
                 </div>
               )}
             </div>
@@ -273,7 +294,7 @@ export function CoursePurchaseDialog({
 
               <Button
                 onClick={handleConfirmPurchase}
-                disabled={isProcessing || (paymentMethod !== "balance" && paymentPhone.trim().replace(/[^\d+]/g, "").length < 8) || (paymentMethod !== "balance" && !accountHolderName.trim()) || (paymentMethod === "balance" && walletBalance < Number(course.price || 0))}
+                disabled={isProcessing || (paymentMethod !== "balance" && paymentPhone.trim().replace(/[^\d+]/g, "").length < 8) || (paymentMethod === "balance" && walletBalance < Number(course.price || 0))}
                 className="bg-primary hover:bg-primary/90 text-white font-black rounded-xl px-8 h-12 text-base gap-2"
               >
                 {isProcessing ? "جارٍ إتمام الدفع..." : `تأكيد الشراء (${course.price} ج.م)`}
