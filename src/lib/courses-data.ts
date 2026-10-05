@@ -84,8 +84,26 @@ export function saveEnrollments(enrollments: CourseEnrollment[]): void {
   }
 }
 
+// الاشتراكات الحقيقية تأتي من Firestore (مجموعة purchases) وتُخزَّن هنا بعد المزامنة.
+const purchasedByUser: Record<string, Set<string>> = {};
+
+export async function syncPurchasedCourses(db: any, uid?: string | null): Promise<void> {
+  if (!db || !uid) return;
+  try {
+    const { collection, getDocs, query, where } = await import("firebase/firestore");
+    const snap = await getDocs(query(collection(db, "purchases"), where("uid", "==", uid), where("status", "==", "completed")));
+    const ids = new Set<string>();
+    snap.forEach((d: any) => { const c = String(d.data()?.courseId || ""); if (c) ids.add(c); });
+    purchasedByUser[uid] = ids;
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("fahimt_enrollments_updated"));
+  } catch (e) {
+    console.error("Failed to sync purchased courses", e);
+  }
+}
+
 export function isUserEnrolled(courseId: string, studentId?: string): boolean {
   if (!studentId) return false;
+  if (purchasedByUser[studentId]?.has(courseId)) return true;
   const enrollments = getStoredEnrollments();
   return enrollments.some(e => e.courseId === courseId && e.studentId === studentId);
 }

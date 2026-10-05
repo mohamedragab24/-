@@ -6,7 +6,8 @@ import { Header } from '@/components/layout/header';
 import { Footer } from '@/components/layout/footer';
 import { Toaster } from '@/components/ui/toaster';
 import { FirebaseClientProvider } from '@/firebase/client-provider';
-import { useFirestore, useDoc, useMemoFirebase } from '@/firebase';
+import { useFirestore, useDoc, useMemoFirebase, useUser } from '@/firebase';
+import { syncPurchasedCourses } from '@/lib/courses-data';
 import { doc } from "firebase/firestore";
 import { FloatingChat } from './floating-chat';
 import { PWAInstallBanner } from './pwa-install-banner';
@@ -90,6 +91,8 @@ export function ClientWrapper({ children }: ClientWrapperProps) {
 
 function ThemeManager({ children }: { children: React.ReactNode }) {
   const firestore = useFirestore();
+  const { user } = useUser();
+  useEffect(() => { if (firestore && user?.uid) void syncPurchasedCourses(firestore, user.uid); }, [firestore, user?.uid]);
   const settingsRef = useMemoFirebase(() => {
     if (!firestore) return null;
     return doc(firestore, "settings", "general");

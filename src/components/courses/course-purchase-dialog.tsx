@@ -21,7 +21,7 @@ import {
   ArrowLeft
 } from "lucide-react";
 import { Course } from "@/lib/types";
-import { isUserEnrolled } from "@/lib/courses-data";
+import { isUserEnrolled, syncPurchasedCourses } from "@/lib/courses-data";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { getAuth } from "firebase/auth";
 import { doc, getDoc, getFirestore } from "firebase/firestore";
@@ -118,6 +118,7 @@ export function CoursePurchaseDialog({
         return;
       }
 
+      try { const fb = initializeFirebase(); await syncPurchasedCourses(fb.firestore, fb.auth?.currentUser?.uid); } catch (_) {}
       setIsProcessing(false);
       toast({
         title: "تم شراء الكورس بنجاح!",
