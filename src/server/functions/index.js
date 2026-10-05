@@ -132,7 +132,7 @@ exports.getSignedVideoUrl = onCall({ secrets: R2_SECRETS }, async (request) => {
   if (!lesson) throw new HttpsError("not-found", "الدرس غير موجود");
 
   let purchased = false;
-  if (lesson.isPreview === true) {
+  if (lesson.isPreview === true || lesson.isFreePreview === true) {
     purchased = true;
   } else {
     try { purchased = await hasEntitlement(uid, courseId); } catch (_) {}
@@ -229,7 +229,7 @@ exports.getR2MediaUrl = onCall({ secrets: R2_SECRETS }, async (request) => {
     if (!lesson || String(lesson.r2Key || '') !== key) {
       throw new HttpsError('permission-denied', 'ملف الدرس غير مطابق');
     }
-    if (!adminUser && !lesson.isPreview) {
+    if (!adminUser && !(lesson.isPreview === true || lesson.isFreePreview === true)) {
       if (!(await hasEntitlement(uid, courseId))) throw new HttpsError('permission-denied', 'لازم تشتري الكورس الأول');
     }
   }
