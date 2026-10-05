@@ -1,6 +1,6 @@
 import { collection, doc, getDoc, getDocs, query, where, orderBy, writeBatch, serverTimestamp, runTransaction, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { getApp } from 'firebase/app';
 import type { Firestore } from 'firebase/firestore';
 import type { FirebaseStorage } from 'firebase/storage';

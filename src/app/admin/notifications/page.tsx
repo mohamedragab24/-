@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useFirebase } from "@/firebase";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 

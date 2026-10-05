@@ -12,7 +12,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Search, Mail, Phone, Fingerprint, ShieldCheck, Loader2, Key, UserCheck, UserX, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { getApp } from "firebase/app";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { Badge } from "@/components/ui/badge";
 
 /**

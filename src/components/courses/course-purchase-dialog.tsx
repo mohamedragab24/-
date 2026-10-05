@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { Course } from "@/lib/types";
 import { isUserEnrolled } from "@/lib/courses-data";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { getAuth } from "firebase/auth";
 import { doc, getDoc, getFirestore } from "firebase/firestore";
 import { initializeFirebase } from "@/firebase";

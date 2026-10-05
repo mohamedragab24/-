@@ -1,7 +1,7 @@
 "use client";
 
 import { getApp } from "firebase/app";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 
 export const GROUP_PRICE_PER_GB = 5;
 export const GROUP_PRICE_PER_STUDENT = 10;

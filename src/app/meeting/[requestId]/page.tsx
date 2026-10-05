@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useUser, useFirestore, useDoc, useMemoFirebase, useFirebase } from "@/firebase";
 import { doc } from "firebase/firestore";
 import { getApp } from "firebase/app";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { 
   Video, 
   Star, 

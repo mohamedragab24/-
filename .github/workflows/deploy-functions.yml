@@ -1,14 +1,9 @@
 name: Deploy Firebase Functions
 
 # تشغيل يدوي: GitHub -> Actions -> "Deploy Firebase Functions" -> Run workflow
-# ويشتغل تلقائيًا عند تعديل مجلد functions.
+# (ملاحظة: الدوال الآن تعمل على Vercel عبر /api/fn، وهذا الـ workflow اختياري ويحتاج خطة Blaze)
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "functions/**"
-      - ".github/workflows/deploy-functions.yml"
 
 env:
   FIREBASE_PROJECT: studio-7708799057-99672

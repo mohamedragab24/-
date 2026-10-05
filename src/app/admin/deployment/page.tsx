@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { useFirestore, useDoc, useMemoFirebase, useFirebase } from "@/firebase";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { doc, setDoc, updateDoc } from "firebase/firestore";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
