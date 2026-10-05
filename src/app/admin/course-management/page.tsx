@@ -139,6 +139,7 @@ export default function AdminCourseManagementPage() {
         instructorName={selected?.instructorName || profile?.fullName || profile?.name || "المفهم"}
         instructorAvatar={selected?.instructorAvatar || profile?.avatarUrl || ""}
         onSaved={() => { setSelected(null); void load(); }}
+        canManagePublication={true}
       />
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>

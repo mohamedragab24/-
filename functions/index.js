@@ -16,7 +16,8 @@ exports.adminAdjustWallet = onCall(async (request) => {
   const action = String(request.data?.action || '').trim();
   const amount = Number(request.data?.amount || 0);
   const details = String(request.data?.details || '').trim();
-  if (!userId || !['deposit', 'withdrawal'].includes(action) || !Number.isFinite(amount) || amount <= 0) {
+  const paymentMethod = String(request.data?.paymentMethod || '').trim();
+  if (!userId || !['deposit', 'withdrawal'].includes(action) || !Number.isFinite(amount) || amount <= 0 || !details || (action === 'deposit' && !paymentMethod)) {
     throw new HttpsError('invalid-argument', 'بيانات تعديل الرصيد غير صحيحة');
   }
   const userRef = db.collection('users').doc(userId);
@@ -49,10 +50,10 @@ exports.adminAdjustWallet = onCall(async (request) => {
     tx.set(walletRef, { balance: newBalance, updatedAt: now }, { merge: true });
     tx.set(txRef, {
       amount, type: action, status: 'completed', details: details || (action === 'deposit' ? 'شحن بواسطة الإدارة' : 'خصم بواسطة الإدارة'),
-      source: 'admin', adminUid: request.auth.uid, timestamp: now, balanceAfter: newBalance,
+      source: 'admin', adminUid: request.auth.uid, timestamp: now, balanceAfter: newBalance, paymentMethod: action === 'deposit' ? paymentMethod : 'admin_adjustment',
     });
   });
-  await db.collection('adminLogs').add({ action: action === 'deposit' ? 'manual_recharge' : 'manual_deduction', targetUserId: userId, amount, adminUid: request.auth.uid, timestamp: now });
+  await db.collection('adminLogs').add({ action: action === 'deposit' ? 'manual_recharge' : 'manual_deduction', targetUserId: userId, amount, reason: details, paymentMethod: action === 'deposit' ? paymentMethod : 'admin_adjustment', adminUid: request.auth.uid, timestamp: now });
   return { ok: true, balance: newBalance, transactionId: txRef.id };
 });
 
@@ -234,7 +235,7 @@ async function sendPurchaseNotification(uid, courseId, course) {
   }
 }
 
-/** Securely create a pending payment request for the current user. The actual purchase is completed only by the payment webhook. */
+/** Create and immediately complete a course purchase after the buyer submits the external payment details. */
 exports.purchaseCourse = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
@@ -242,8 +243,12 @@ exports.purchaseCourse = onCall(async (request) => {
   const paymentMethod = String(request.data?.paymentMethod || 'balance');
   const phone = String(request.data?.phone || '').trim();
   if (!courseId) throw new HttpsError('invalid-argument', 'معرف الكورس غير صحيح');
-  if (!['balance', 'card'].includes(paymentMethod)) throw new HttpsError('invalid-argument', 'طريقة الدفع غير مدعومة');
-  if (paymentMethod === 'card' && phone.replace(/[^\d+]/g, '').length < 8) throw new HttpsError('invalid-argument', 'اكتب رقم الهاتف المرتبط بالدفع');
+  const supportedPaymentMethods = ['balance', 'vodafone_cash', 'orange_cash', 'etisalat_cash', 'we_pay', 'instapay', 'bank_transfer'];
+  if (!supportedPaymentMethods.includes(paymentMethod)) throw new HttpsError('invalid-argument', 'طريقة الدفع غير مدعومة');
+  const accountHolderName = String(request.data?.accountHolderName || '').trim();
+  if (paymentMethod !== 'balance' && phone.replace(/[^\d+]/g, '').length < 8) throw new HttpsError('invalid-argument', 'اكتب رقم الحساب/الهاتف الذي تم الدفع منه');
+  if (paymentMethod !== 'balance' && !accountHolderName) throw new HttpsError('invalid-argument', 'اكتب اسم صاحب الحساب');
+  
   try {
     let course = null;
     const courseSnap = await db.collection('courses').doc(courseId).get();
@@ -265,11 +270,28 @@ exports.purchaseCourse = onCall(async (request) => {
     const orderNumber = `FH-${Date.now().toString(36).toUpperCase()}-${paymentRef.id.slice(0, 6).toUpperCase()}`;
     const common = { orderNumber, uid, courseId, courseName: String(course.title || course.name || ''), amount,
       userName: String(userData.fullName || userData.name || request.auth.token?.name || ''),
-      email: String(request.auth.token?.email || userData.email || ''), phone: phone || String(userData.phone || ''),
+      email: String(request.auth.token?.email || userData.email || ''), phone: phone || String(userData.phone || ''), accountHolderName, publicId: String(userData.publicId || ''),
       source: String(request.data?.source || 'web'), createdAt: now };
-    if (paymentMethod === 'card') {
-      await paymentRef.set({ ...common, status: 'pending', paymentMethod: 'external_pending' });
-      return { ok: true, pending: true, paymentId: paymentRef.id, orderNumber, amountPaid: 0 };
+    if (paymentMethod !== 'balance') {
+      // External payment methods are confirmed immediately by the submitted payment number.
+      // No admin review or pending state is used for course purchases.
+      await paymentRef.set({
+        ...common,
+        status: 'completed',
+        paymentMethod,
+        paymentPhone: phone,
+        accountHolderName,
+        publicId: String(userData.publicId || ''),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Activate the course immediately instead of waiting for an admin/webhook review.
+      await purchaseRef.set({
+        uid, courseId, status: 'completed', amountPaid: amount, paymentId: paymentRef.id,
+        orderNumber, paymentMethod, source: common.source, purchasedAt: now, updatedAt: now,
+      }, { merge: true });
+
+      return { ok: true, pending: false, paymentId: paymentRef.id, orderNumber, amountPaid: amount };
     }
     await db.runTransaction(async (tx) => {
       const purchaseSnap = await tx.get(purchaseRef);
@@ -308,6 +330,21 @@ exports.purchaseCourse = onCall(async (request) => {
     console.error('purchaseCourse failed', e);
     throw new HttpsError('internal', `تعذر إتمام الشراء: ${String(e?.message || e).slice(0, 180)}`);
   }
+});
+
+/** Admin-only confirmation for manually verified external course payments. */
+exports.adminCompleteCoursePayment = onCall(async (request) => {
+  if (!(await isAdminRequest(request))) throw new HttpsError('permission-denied', 'ليس لديك صلاحية تأكيد مدفوعات الكورسات');
+  const paymentId = String(request.data?.paymentId || '').trim();
+  if (!paymentId) throw new HttpsError('invalid-argument', 'رقم عملية الدفع مطلوب');
+  const paymentRef = db.collection('payments').doc(paymentId);
+  const snap = await paymentRef.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'عملية الدفع غير موجودة');
+  const payment = snap.data() || {};
+  if (payment.status === 'completed') return { ok: true, alreadyCompleted: true };
+  if (payment.status !== 'pending') throw new HttpsError('failed-precondition', 'العملية ليست معلقة');
+  await paymentRef.update({ status: 'completed', completedAt: admin.firestore.FieldValue.serverTimestamp(), completedBy: request.auth.uid });
+  return { ok: true };
 });
 
 /** Firebase-first purchase check with R2 disaster-recovery fallback. */

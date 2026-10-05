@@ -63,6 +63,7 @@ interface CourseEditorDialogProps {
   instructorName: string;
   instructorAvatar?: string;
   onSaved?: () => void;
+  canManagePublication?: boolean;
 }
 
 export function CourseEditorDialog({
@@ -72,7 +73,8 @@ export function CourseEditorDialog({
   instructorId,
   instructorName,
   instructorAvatar,
-  onSaved
+  onSaved,
+  canManagePublication = false
 }: CourseEditorDialogProps) {
   const { toast } = useToast();
 
@@ -340,8 +342,8 @@ export function CourseEditorDialog({
       instructorId: courseToEdit?.instructorId || getAuth(getApp()).currentUser?.uid || instructorId || "",
       instructorName: courseToEdit?.instructorName || instructorName || "المُفهم المتخصص",
       instructorAvatar: courseToEdit?.instructorAvatar || instructorAvatar || "",
-      isPublished: courseToEdit ? isPublished : false,
-      status: courseToEdit ? (isPublished ? "published" : "pending") : "pending",
+      isPublished: courseToEdit ? (canManagePublication ? isPublished : courseToEdit.isPublished) : false,
+      status: courseToEdit ? ((canManagePublication ? isPublished : courseToEdit.isPublished) ? "published" : "pending") : "pending",
       category,
       createdAt: courseToEdit?.createdAt || new Date().toISOString(),
       totalEnrollments: courseToEdit?.totalEnrollments || 0,
@@ -355,7 +357,7 @@ export function CourseEditorDialog({
         throw new Error("AUTH_REQUIRED: يجب تسجيل الدخول قبل حفظ الكورس");
       }
       const db = getFirestore(getApp());
-      await saveCourseWithLessons(db, { ...courseData, instructorId: currentUser.uid }, normalizedLessons, courseToEdit?.lessons?.map(l => l.id) || []);
+      await saveCourseWithLessons(db, { ...courseData, instructorId: courseData.instructorId }, normalizedLessons, courseToEdit?.lessons?.map(l => l.id) || []);
       // Keep local cache only for backward compatibility with the old UI.
       upsertCourse(courseData);
       toast({
@@ -390,12 +392,12 @@ export function CourseEditorDialog({
               {courseToEdit ? "تعديل الكورس الجاهز" : "إنشاء كورس جاهز جديد (رفع فيديوهات وصور)"}
             </DialogTitle>
             <DialogDescription className="text-zinc-500 font-bold">
-              ارفع الفيديوهات والصور مباشرة من جهازك بدون روابط خارجية، وحدد السعر والنشر.
+              ارفع الفيديوهات والصور مباشرة من جهازك بدون روابط خارجية. التحكم في إخفاء أو نشر الكورس متاح للإدارة فقط.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-6 py-4">
-            {/* الحالة: نشر أو إخفاء */}
+            {/* حالة النشر: الأدمن فقط يستطيع إخفاء/إعادة نشر الكورس */}
             <div className="flex items-center justify-between p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl border">
               <div className="space-y-0.5 text-right">
                 <Label className="text-base font-black flex items-center gap-2">
@@ -406,7 +408,11 @@ export function CourseEditorDialog({
                   {isPublished ? "يظهر الكورس للطلاب في صفحة الكورسات ويمكنهم شراؤه فوراً." : "لا يمكن للطلاب مشاهدة أو شراء الكورس حتى تقوم بنشره."}
                 </p>
               </div>
-              <Switch checked={isPublished} onCheckedChange={setIsPublished} />
+              {canManagePublication ? (
+                <Switch checked={isPublished} onCheckedChange={setIsPublished} />
+              ) : (
+                <Badge className="bg-emerald-100 text-emerald-700 font-black">المُفهم لا يستطيع إخفاء الكورس</Badge>
+              )}
             </div>
 
             {/* الأساسيات: الاسم والسعر والتصنيف */}

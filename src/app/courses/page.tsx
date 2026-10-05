@@ -41,7 +41,8 @@ import {
   getStoredCourses, 
   getStoredEnrollments, 
   upsertCourse,
-  isUserEnrolled 
+  isUserEnrolled,
+  syncPurchasedCourses
 } from "@/lib/courses-data";
 import { listAllCourses, listPublishedCourses } from "@/lib/course-service";
 import { CourseEditorDialog } from "@/components/courses/course-editor-dialog";
@@ -93,10 +94,13 @@ export default function CoursesPage() {
 
   const refreshData = async () => {
     try {
+      if (!isMufhem && user?.uid) {
+        await syncPurchasedCourses(firestore, user.uid);
+      }
       const remoteCourses = isMufhem
         ? await listAllCourses(firestore)
-        : await listPublishedCourses(firestore);
-      setCourses(remoteCourses);
+        : await listAllCourses(firestore);
+      setCourses(remoteCourses.filter((c) => isMufhem || c.isPublished || isUserEnrolled(c.id, currentUserId)));
     } catch (error) {
       console.error("Failed to load courses from Firebase", error);
       setCourses(getStoredCourses());
@@ -121,33 +125,17 @@ export default function CoursesPage() {
     if (isMufhem) {
       setActiveTab("instructor");
     } else {
-      setActiveTab("all");
+      const tab = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
+      setActiveTab(tab === "enrolled" ? "enrolled" : "all");
     }
   }, [isMufhem]);
 
   const handleTogglePublish = async (course: Course) => {
-    const updated = { ...course, isPublished: !course.isPublished };
-    try {
-      await import("firebase/firestore").then(({ updateDoc, doc, serverTimestamp }) =>
-        updateDoc(doc(firestore, "courses", course.id), {
-          isPublished: updated.isPublished,
-          status: updated.isPublished ? "published" : "pending",
-          updatedAt: serverTimestamp()
-        })
-      );
-    } catch (error) {
-      console.error(error);
-      toast({ title: "تعذر تحديث النشر", description: "تعذر تحديث الكورس على Firebase.", variant: "destructive" });
+    if (isMufhem) {
+      toast({ title: "النشر ثابت", description: "لا يمكن للمُفهم إخفاء أو إلغاء نشر الكورس. يمكن للإدارة فقط التحكم في حالة النشر." });
       return;
     }
-    upsertCourse(updated);
-    toast({
-      title: updated.isPublished ? "تم نشر الكورس" : "تم إخفاء الكورس",
-      description: updated.isPublished 
-        ? "أصبح الكورس متاحاً للطلاب في قائمة الكورسات." 
-        : "تم حجب الكورس عن الطلاب وأصبح مسودة خاصة."
-    });
-    refreshData();
+    return;
   };
 
 
@@ -280,7 +268,7 @@ export default function CoursesPage() {
                     className="rounded-xl px-6 py-3 font-black text-sm data-[state=active]:bg-primary data-[state=active]:text-white gap-2"
                   >
                     <CheckCircle size={16} />
-                    كورساتي المشتركة ({myEnrolledCourses.length})
+                    كورساتي ({myEnrolledCourses.length})
                   </TabsTrigger>
                 </>
               )}
@@ -592,14 +580,9 @@ export default function CoursesPage() {
                         </Link>
                       </Button>
 
-                      <Button
-                        variant="outline"
-                        onClick={() => handleTogglePublish(course)}
-                        className="rounded-xl font-bold text-xs h-10 gap-1.5 cursor-pointer"
-                      >
-                        {course.isPublished ? <EyeOff size={14} /> : <Eye size={14} />}
-                        {course.isPublished ? "إخفاء الكورس" : "نشر الكورس"}
-                      </Button>
+                      <Badge className="rounded-xl font-black text-xs h-10 px-3 flex items-center bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <Eye size={14} className="ml-1" /> النشر لا يختفي بواسطة المُفهم
+                      </Badge>
 
                       <Button
                         variant="outline"

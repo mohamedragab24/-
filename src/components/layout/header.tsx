@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { GraduationCap, Layout, Search, Menu, User, Zap, MessageSquare, Bell, ShieldCheck, Layers, Users } from "lucide-react";
+import { GraduationCap, Layout, Search, Menu, User, Zap, MessageSquare, Bell, ShieldCheck, Layers, Users, BookOpen } from "lucide-react";
 import { useFirestore, useDoc, useMemoFirebase, useFirebase, useUser, useCollection } from "@/firebase";
 import { doc, collection, query, where } from "firebase/firestore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -87,6 +87,7 @@ export function Header() {
           <div className="flex items-center gap-1 md:gap-4 shrink-0">
             <nav className="hidden md:flex items-center gap-2 pl-4 border-l border-zinc-100">
               <HeaderNavLink href="/courses" icon={Layers} label="الكورسات" />
+              {user && <HeaderNavLink href="/courses?tab=enrolled" icon={BookOpen} label="كورساتي" />}
               {user && <HeaderNavLink href="/groups" icon={Users} label="المجموعات" />}
               <HeaderNavLink href="/teachers" icon={GraduationCap} label="المُفهمين" />
               <HeaderNavLink href="/portfolio" icon={Layout} label="أعمال المفهمين" />

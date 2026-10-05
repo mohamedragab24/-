@@ -166,6 +166,7 @@ export function AppSidebar() {
             <SidebarSeparator className="my-4" />
             
             <NavItem href="/courses" icon={Layers} label="الكورسات" />
+            <NavItem href="/courses?tab=enrolled" icon={BookOpen} label="كورساتي" />
             <NavItem href="/teachers" icon={Users} label="تصفح المفهمين" />
             <NavItem href="/portfolio" icon={Layout} label="تصفح أعمال المفهمين" />
             <NavItem href="/browse" icon={Search} label="تصفح الاستفهامات" />

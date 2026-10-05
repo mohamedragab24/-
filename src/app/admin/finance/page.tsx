@@ -27,6 +27,8 @@ export default function AdminFinance() {
   const [targetUser, setTargetUser] = useState<any>(null);
   const [amount, setAmount] = useState("");
   const [actionType, setActionType] = useState<'deposit' | 'withdrawal'>('deposit');
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [reason, setReason] = useState('');
   
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
   const [selectedPayout, setSelectedPayout] = useState<any>(null);
@@ -94,7 +96,10 @@ export default function AdminFinance() {
   };
 
   const handleManualAction = async () => {
-    if (!firestore || !targetUser || !amount) return;
+    if (!firestore || !targetUser || !amount || !reason.trim() || (actionType === 'deposit' && !paymentMethod)) {
+      toast({ variant: 'destructive', title: 'بيانات ناقصة', description: 'اكتب السبب واختر وسيلة الدفع عند الإضافة.' });
+      return;
+    }
     try {
       const numAmount = Number(amount);
       if (!Number.isFinite(numAmount) || numAmount <= 0) throw new Error("invalid_amount");
@@ -104,10 +109,12 @@ export default function AdminFinance() {
         userId: targetUser.id,
         amount: numAmount,
         action: actionType,
-        details: actionType === 'deposit' ? 'شحن رصيد يدوي بواسطة الإدارة' : 'خصم رصيد يدوي بواسطة الإدارة',
+        details: reason.trim(), paymentMethod: actionType === 'deposit' ? paymentMethod : 'admin_adjustment',
       });
       toast({ title: "تمت العملية!", description: `تم تحديث رصيد ${targetUser.fullName || targetUser.name || targetUser.email} بنجاح.` });
       setAmount("");
+      setReason("");
+      setPaymentMethod("");
       setTargetUser(null);
       setSearchId("");
     } catch (e) {
@@ -210,6 +217,27 @@ export default function AdminFinance() {
                       <h4 className="text-xl font-black">{targetUser.fullName}</h4>
                       <p className="text-sm text-muted-foreground font-bold">{targetUser.email}</p>
                     </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label className="font-black">سبب العملية *</Label>
+                      <Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="مثال: شحن بناءً على تحويل بنكي رقم ..." className="rounded-xl font-bold" />
+                    </div>
+                    {actionType === 'deposit' && (
+                      <div className="space-y-2">
+                        <Label className="font-black">وسيلة الدفع *</Label>
+                        <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="w-full h-12 rounded-xl border bg-white px-3 font-bold">
+                          <option value="">اختر وسيلة الدفع</option>
+                          <option value="vodafone_cash">فودافون كاش</option>
+                          <option value="orange_cash">أورنج كاش</option>
+                          <option value="etisalat_cash">اتصالات كاش</option>
+                          <option value="we_pay">وي باي</option>
+                          <option value="instapay">إنستا باي</option>
+                          <option value="bank_transfer">تحويل بنكي</option>
+                        </select>
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">

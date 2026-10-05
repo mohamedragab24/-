@@ -53,9 +53,10 @@ export function CoursePurchaseDialog({
   const { toast } = useToast();
   const router = useRouter();
 
-  const [paymentMethod, setPaymentMethod] = useState<"balance" | "card">("balance");
+  const [paymentMethod, setPaymentMethod] = useState<"balance" | "vodafone_cash" | "orange_cash" | "etisalat_cash" | "we_pay" | "instapay" | "bank_transfer">("balance");
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentPhone, setPaymentPhone] = useState("");
+  const [accountHolderName, setAccountHolderName] = useState("");
   const [walletBalance, setWalletBalance] = useState(Number(currentBalance ?? 0));
   useEffect(() => {
     if (typeof currentBalance === "number") setWalletBalance(currentBalance);
@@ -109,15 +110,8 @@ export function CoursePurchaseDialog({
       const { firebaseApp } = initializeFirebase();
       const functions = getFunctions(firebaseApp, "us-central1");
       const purchaseCourse = httpsCallable(functions, "purchaseCourse");
-      const result: any = await purchaseCourse({ courseId: course.id, source: "web", paymentMethod, phone: paymentPhone.trim() });
+      const result: any = await purchaseCourse({ courseId: course.id, source: "web", paymentMethod, phone: paymentPhone.trim(), accountHolderName: accountHolderName.trim() });
       if (!result.data?.ok) throw new Error("purchase_failed");
-      if (result.data?.pending) {
-        setIsProcessing(false);
-        onOpenChange(false);
-        router.push(`/order-complete?paymentId=${encodeURIComponent(result.data.paymentId)}&pending=1`);
-        return;
-      }
-
       try { const fb = initializeFirebase(); await syncPurchasedCourses(fb.firestore, fb.auth?.currentUser?.uid); } catch (_) {}
       setIsProcessing(false);
       toast({
@@ -226,47 +220,26 @@ export function CoursePurchaseDialog({
               <h5 className="font-black text-sm text-zinc-800">طريقة الدفع:</h5>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* خيار 1: رصيد المحفظة */}
-                <div
-                  onClick={() => setPaymentMethod("balance")}
-                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
-                    paymentMethod === "balance"
-                      ? "border-primary bg-primary/5 shadow-sm"
-                      : "border-zinc-200 hover:border-zinc-300"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-black text-sm text-zinc-900">رصيد فهمت</span>
-                    <Wallet className={`w-5 h-5 ${paymentMethod === "balance" ? "text-primary" : "text-zinc-400"}`} />
+                {[
+                  ["balance", "محفظة فهمت", `الرصيد المتاح: ${walletBalance} ج.م`],
+                  ["vodafone_cash", "فودافون كاش", "محفظة إلكترونية"],
+                  ["orange_cash", "أورنج كاش", "محفظة إلكترونية"],
+                  ["etisalat_cash", "اتصالات كاش", "محفظة إلكترونية"],
+                  ["we_pay", "وي باي", "محفظة إلكترونية"],
+                  ["instapay", "إنستا باي", "تحويل فوري"],
+                  ["bank_transfer", "تحويل بنكي", "تحويل بنكي"]
+                ].map(([value, label, hint]) => (
+                  <div key={value} onClick={() => setPaymentMethod(value as any)} className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${paymentMethod === value ? "border-primary bg-primary/5 shadow-sm" : "border-zinc-200 hover:border-zinc-300"}`}>
+                    <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">{label}</span>{value === "balance" ? <Wallet className="w-5 h-5 text-primary" /> : <CreditCard className="w-5 h-5 text-zinc-400" />}</div>
+                    <p className="text-xs text-zinc-500 font-bold">{hint}</p>
                   </div>
-                  <p className="text-xs text-zinc-500 font-bold font-mono">
-                    المتوفر: {walletBalance} ج.م
-                  </p>
-                </div>
-
-                {/* خيار 2: دفع خارجي (يتطلب تفعيل البوابة) */}
-                <div
-                  onClick={() => setPaymentMethod("card")}
-                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
-                    paymentMethod === "card"
-                      ? "border-primary bg-primary/5 shadow-sm"
-                      : "border-zinc-200 hover:border-zinc-300"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-black text-sm text-zinc-900">الدفع برقم الهاتف</span>
-                    <CreditCard className={`w-5 h-5 ${paymentMethod === "card" ? "text-primary" : "text-zinc-400"}`} />
-                  </div>
-                  <p className="text-xs text-zinc-500 font-bold">
-سيتم فتح طلب دفع برقم الهاتف بعد ربط بوابة الدفع المعتمدة
-                  </p>
-                </div>
+                ))}
               </div>
-              {paymentMethod === "card" && (
-                <div className="mt-3 space-y-2">
-                  <label htmlFor="payment-phone" className="text-sm font-bold text-zinc-700">رقم الهاتف المرتبط بالدفع</label>
-                  <input id="payment-phone" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={e => setPaymentPhone(e.target.value)} placeholder="01xxxxxxxxx" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" />
-                  <p className="text-xs text-amber-700">لا يمكن خصم أموال من رقم هاتف مباشرة بدون بوابة دفع مرخّصة. الطلب يُسجّل كمعلّق حتى تأكيد التحصيل من مزود الدفع.</p>
+              {paymentMethod !== "balance" && (
+                <div className="mt-3 space-y-3">
+                  <div><label htmlFor="payment-phone" className="text-sm font-bold text-zinc-700">رقم الحساب/الهاتف الذي تم الدفع منه *</label><input id="payment-phone" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={e => setPaymentPhone(e.target.value)} placeholder="01xxxxxxxxx" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" /></div>
+                  <div><label htmlFor="account-holder" className="text-sm font-bold text-zinc-700">اسم صاحب الحساب *</label><input id="account-holder" value={accountHolderName} onChange={e => setAccountHolderName(e.target.value)} placeholder="الاسم كما هو في وسيلة الدفع" className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-right" /></div>
+                  <p className="text-xs text-amber-700 bg-amber-50 p-3 rounded-xl">سيتم إنشاء الطلب كمعلّق، ولا يفتح الكورس إلا بعد تأكيد الإدارة لتحصيل المبلغ.</p>
                 </div>
               )}
             </div>
@@ -300,7 +273,7 @@ export function CoursePurchaseDialog({
 
               <Button
                 onClick={handleConfirmPurchase}
-                disabled={isProcessing || (paymentMethod === "card" && paymentPhone.trim().replace(/[^\d+]/g, "").length < 8) || (paymentMethod === "balance" && walletBalance < Number(course.price || 0))}
+                disabled={isProcessing || (paymentMethod !== "balance" && paymentPhone.trim().replace(/[^\d+]/g, "").length < 8) || (paymentMethod !== "balance" && !accountHolderName.trim()) || (paymentMethod === "balance" && walletBalance < Number(course.price || 0))}
                 className="bg-primary hover:bg-primary/90 text-white font-black rounded-xl px-8 h-12 text-base gap-2"
               >
                 {isProcessing ? "جارٍ إتمام الدفع..." : `تأكيد الشراء (${course.price} ج.م)`}
