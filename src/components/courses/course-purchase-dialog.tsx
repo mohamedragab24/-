@@ -25,9 +25,10 @@ import { isUserEnrolled, syncPurchasedCourses } from "@/lib/courses-data";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { getAuth } from "firebase/auth";
 import { collection, doc, getDocs, getDoc, getFirestore, query, where } from "firebase/firestore";
-import { initializeFirebase } from "@/firebase";
+import { initializeFirebase, useFirestore, useUser, useMemoFirebase, useDoc } from "@/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
+import { R2MediaImage } from "@/components/r2-media-image";
 
 interface CoursePurchaseDialogProps {
   open: boolean;
@@ -52,6 +53,12 @@ export function CoursePurchaseDialog({
 }: CoursePurchaseDialogProps) {
   const { toast } = useToast();
   const router = useRouter();
+  const { user } = useUser();
+  const firestore = useFirestore();
+  const walletRef = useMemoFirebase(() => (firestore && user?.uid) ? doc(firestore, "wallets", user.uid) : null, [firestore, user?.uid]);
+  const userRef = useMemoFirebase(() => (firestore && user?.uid) ? doc(firestore, "users", user.uid) : null, [firestore, user?.uid]);
+  const { data: liveWallet } = useDoc(walletRef);
+  const { data: liveProfile } = useDoc(userRef);
 
   const [paymentMethod, setPaymentMethod] = useState<"balance" | "vodafone_cash" | "orange_cash" | "etisalat_cash" | "we_pay" | "instapay" | "bank_transfer">("balance");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -71,22 +78,20 @@ export function CoursePurchaseDialog({
         const methodsSnap = await getDocs(query(collection(fs, "paymentMethods"), where("active", "==", true)));
         const methods = methodsSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a:any,b:any) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
         if (active) setPaymentMethods(methods);
-        const uid = getAuth(firebaseApp).currentUser?.uid;
-        if (!uid) { if (active && currentBalance == null) setWalletBalance(0); return; }
-        const walletSnap = await getDoc(doc(fs, "wallets", uid));
-        const userSnap = await getDoc(doc(fs, "users", uid));
-        const storedBalance = walletSnap.exists() ? Number(walletSnap.data()?.balance) : NaN;
-        const legacyBalance = userSnap.exists() ? Number(userSnap.data()?.balance) : NaN;
-        const recognizedBalance = Number.isFinite(storedBalance) ? storedBalance : legacyBalance;
-        if (Number.isFinite(recognizedBalance)) {
-          if (active) setWalletBalance(Math.round(recognizedBalance * 100) / 100);
-        } else if (active) {
-          setWalletBalance(0);
-        }
-      } catch (e) { console.error("Unable to load wallet balance", e); }
+      } catch (e) {
+        console.error("Unable to load payment methods", e);
+      }
     })();
     return () => { active = false; };
-  }, [open, currentBalance]);
+  }, [open]);
+
+  useEffect(() => {
+    const wallet = Number(liveWallet?.balance);
+    const legacy = Number(liveProfile?.balance);
+    if (Number.isFinite(wallet)) setWalletBalance(Math.round(wallet * 100) / 100);
+    else if (Number.isFinite(legacy)) setWalletBalance(Math.round(legacy * 100) / 100);
+    else if (typeof currentBalance === "number" && Number.isFinite(currentBalance)) setWalletBalance(currentBalance);
+  }, [liveWallet?.balance, liveProfile?.balance, currentBalance]);
 
   if (!course) return null;
 
@@ -204,7 +209,7 @@ export function CoursePurchaseDialog({
           <div className="space-y-6 py-4">
             {/* بطاقة ملخص الكورس */}
             <div className="flex gap-4 p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl border text-right">
-              <img
+              <R2MediaImage
                 src={course.coverUrl}
                 alt={course.title}
                 className="w-24 h-24 rounded-xl object-cover shrink-0 border"

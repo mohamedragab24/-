@@ -16,7 +16,8 @@ exports.adminAdjustWallet = onCall(async (request) => {
   const action = String(request.data?.action || '').trim();
   const amount = Number(request.data?.amount || 0);
   const details = String(request.data?.details || '').trim();
-  if (!userId || !['deposit', 'withdrawal'].includes(action) || !Number.isFinite(amount) || amount <= 0) {
+  const paymentMethod = String(request.data?.paymentMethod || '').trim();
+  if (!userId || !['deposit', 'withdrawal'].includes(action) || !Number.isFinite(amount) || amount <= 0 || !details || (action === 'deposit' && !paymentMethod)) {
     throw new HttpsError('invalid-argument', 'بيانات تعديل الرصيد غير صحيحة');
   }
   const userRef = db.collection('users').doc(userId);
@@ -28,17 +29,29 @@ exports.adminAdjustWallet = onCall(async (request) => {
     const userSnap = await tx.get(userRef);
     if (!userSnap.exists) throw new HttpsError('not-found', 'المستخدم غير موجود');
     const walletSnap = await tx.get(walletRef);
-    const current = Number(walletSnap.data()?.balance ?? 0);
+    let current = Number(walletSnap.data()?.balance);
+    if (!Number.isFinite(current)) {
+      current = Number(userSnap.data()?.balance);
+    }
+    if (!Number.isFinite(current)) {
+      current = 0;
+      const ledgerSnap = await tx.get(userRef.collection('transactions'));
+      ledgerSnap.forEach((d) => {
+        const t = d.data() || {};
+        if (['rejected', 'pending', 'cancelled'].includes(String(t.status || ''))) return;
+        const n = Number(t.amount || 0);
+        if (['deposit', 'earning', 'refund'].includes(String(t.type || ''))) current += n;
+        else current -= n;
+      });
+    }
     const next = action === 'deposit' ? current + amount : current - amount;
     if (action === 'withdrawal' && next < -0.0001) throw new HttpsError('failed-precondition', 'رصيد المستخدم غير كافٍ');
     newBalance = Math.round(next * 100) / 100;
     tx.set(walletRef, { balance: newBalance, updatedAt: now }, { merge: true });
-    tx.set(txRef, {
-      amount, type: action, status: 'completed', details: details || (action === 'deposit' ? 'شحن بواسطة الإدارة' : 'خصم بواسطة الإدارة'),
-      source: 'admin', adminUid: request.auth.uid, timestamp: now, balanceAfter: newBalance,
-    });
+    tx.set(userRef, { balance: newBalance, updatedAt: now }, { merge: true });
+    tx.set(txRef, { amount, type: action, status: 'completed', details, source: 'admin', adminUid: request.auth.uid, timestamp: now, balanceAfter: newBalance, paymentMethod: action === 'deposit' ? paymentMethod : 'admin_adjustment' });
   });
-  await db.collection('adminLogs').add({ action: action === 'deposit' ? 'manual_recharge' : 'manual_deduction', targetUserId: userId, amount, adminUid: request.auth.uid, timestamp: now });
+  await db.collection('adminLogs').add({ action: action === 'deposit' ? 'manual_recharge' : 'manual_deduction', targetUserId: userId, amount, reason: details, paymentMethod: action === 'deposit' ? paymentMethod : 'admin_adjustment', adminUid: request.auth.uid, timestamp: now });
   return { ok: true, balance: newBalance, transactionId: txRef.id };
 });
 
@@ -230,65 +243,74 @@ exports.purchaseCourse = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
   const courseId = String(request.data?.courseId || '').trim();
-  const paymentMethod = String(request.data?.paymentMethod || 'balance');
+  const paymentMethod = String(request.data?.paymentMethod || 'balance').trim();
   const phone = String(request.data?.phone || '').trim();
   if (!courseId) throw new HttpsError('invalid-argument', 'معرف الكورس غير صحيح');
-  if (!['balance', 'card'].includes(paymentMethod)) throw new HttpsError('invalid-argument', 'طريقة الدفع غير مدعومة');
-  if (paymentMethod === 'card' && phone.replace(/[^\d+]/g, '').length < 8) throw new HttpsError('invalid-argument', 'اكتب رقم الهاتف المرتبط بالدفع');
+
+  const supported = ['balance', 'vodafone_cash', 'orange_cash', 'etisalat_cash', 'we_pay', 'instapay', 'bank_transfer'];
+  let dynamicMethod = null;
+  if (!supported.includes(paymentMethod)) {
+    const methodSnap = await db.collection('paymentMethods').doc(paymentMethod).get();
+    dynamicMethod = methodSnap.exists ? (methodSnap.data() || {}) : null;
+    if (!dynamicMethod || dynamicMethod.active === false) throw new HttpsError('invalid-argument', 'طريقة الدفع غير مدعومة أو غير مفعلة');
+  }
+  if (paymentMethod !== 'balance' && phone.replace(/[^\d+]/g, '').length < 8) {
+    throw new HttpsError('invalid-argument', 'اكتب رقم الحساب أو الهاتف الذي تم الدفع منه');
+  }
+
   try {
-    let course = null;
     const courseSnap = await db.collection('courses').doc(courseId).get();
-    if (courseSnap.exists) course = courseSnap.data() || {};
-    if (!course) { try { const r = await fetch(`${R2_PUBLIC_BASE}/courses/${encodeURIComponent(courseId)}/manifest.json`); if (r.ok) course = await r.json(); } catch (_) {} }
-    if (!course) throw new HttpsError('not-found', 'الكورس غير موجود');
+    if (!courseSnap.exists) throw new HttpsError('not-found', 'الكورس غير موجود');
+    const course = courseSnap.data() || {};
     if (course.status && course.status !== 'published' && course.isPublished !== true) throw new HttpsError('failed-precondition', 'الكورس غير منشور');
     const amount = Math.max(0, Number(course.price || 0));
     const purchaseRef = db.collection('purchases').doc(`${uid}_${courseId}`);
-    const existingPurchase = await purchaseRef.get();
-    if (existingPurchase.exists && existingPurchase.data()?.status === 'completed') {
-      const old = existingPurchase.data() || {};
+    const existing = await purchaseRef.get();
+    if (existing.exists && existing.data()?.status === 'completed') {
+      const old = existing.data() || {};
       return { ok: true, alreadyPurchased: true, paymentId: String(old.paymentId || ''), orderNumber: String(old.orderNumber || ''), amountPaid: Number(old.amountPaid || amount) };
     }
+
     const paymentRef = db.collection('payments').doc();
     const now = admin.firestore.FieldValue.serverTimestamp();
     const userSnap = await db.collection('users').doc(uid).get();
     const userData = userSnap.data() || {};
     const orderNumber = `FH-${Date.now().toString(36).toUpperCase()}-${paymentRef.id.slice(0, 6).toUpperCase()}`;
-    const common = { orderNumber, uid, courseId, courseName: String(course.title || course.name || ''), amount,
+    const common = {
+      orderNumber, uid, courseId, courseName: String(course.title || course.name || ''), amount,
       userName: String(userData.fullName || userData.name || request.auth.token?.name || ''),
-      email: String(request.auth.token?.email || userData.email || ''), phone: phone || String(userData.phone || ''),
-      source: String(request.data?.source || 'web'), createdAt: now };
-    if (paymentMethod === 'card') {
-      await paymentRef.set({ ...common, status: 'pending', paymentMethod: 'external_pending' });
-      return { ok: true, pending: true, paymentId: paymentRef.id, orderNumber, amountPaid: 0 };
+      email: String(request.auth.token?.email || userData.email || ''),
+      phone: String(userData.phone || ''),
+      paymentPhone: paymentMethod === 'balance' ? '' : phone,
+      publicId: String(userData.publicId || ''),
+      source: String(request.data?.source || 'web'), createdAt: now
+    };
+
+    if (paymentMethod !== 'balance') {
+      await paymentRef.set({ ...common, status: 'completed', paymentMethod, paymentAccount: dynamicMethod?.accountNumber || '', completedAt: now });
+      await purchaseRef.set({ uid, courseId, status: 'completed', amountPaid: amount, paymentId: paymentRef.id, orderNumber, paymentMethod, paymentPhone: phone, source: common.source, purchasedAt: now, updatedAt: now }, { merge: true });
+      return { ok: true, pending: false, paymentId: paymentRef.id, orderNumber, amountPaid: amount };
     }
+
     await db.runTransaction(async (tx) => {
       const purchaseSnap = await tx.get(purchaseRef);
       if (purchaseSnap.exists && purchaseSnap.data()?.status === 'completed') return;
       const userRef = db.collection('users').doc(uid);
       const walletRef = db.collection('wallets').doc(uid);
       const walletSnap = await tx.get(walletRef);
-      const walletBalanceValue = Number(walletSnap.data()?.balance);
-      let balance = Number.isFinite(walletBalanceValue) ? walletBalanceValue : 0;
-      if (!Number.isFinite(walletBalanceValue)) {
-        const ledger = userRef.collection('transactions');
-        const ledgerSnap = await tx.get(ledger);
-        balance = 0;
-        ledgerSnap.forEach((d) => {
-          const t = d.data() || {};
-          if (['rejected', 'pending', 'cancelled'].includes(String(t.status || ''))) return;
-          const n = Number(t.amount || 0);
-          if (['deposit', 'earning', 'refund'].includes(String(t.type || ''))) balance += n; else balance -= n;
-        });
-      }
+      const userForBalance = await tx.get(userRef);
+      let balance = Number(walletSnap.data()?.balance);
+      if (!Number.isFinite(balance)) balance = Number(userForBalance.data()?.balance);
+      if (!Number.isFinite(balance)) balance = 0;
       if (balance + 0.0001 < amount) throw new HttpsError('failed-precondition', `رصيد المحفظة غير كافٍ. الرصيد الحالي ${balance.toFixed(2)} جنيه`);
       const nextBalance = Math.round((balance - amount) * 100) / 100;
-      const ledger = userRef.collection('transactions');
       tx.set(walletRef, { balance: nextBalance, updatedAt: now }, { merge: true });
+      tx.set(userRef, { balance: nextBalance, updatedAt: now }, { merge: true });
       tx.set(paymentRef, { ...common, status: 'completed', paymentMethod: 'wallet', completedAt: now });
-      tx.set(ledger.doc(), { amount, type: 'payment', status: 'completed', details: `شراء كورس: ${common.courseName || courseId}`, courseId, paymentId: paymentRef.id, orderNumber, timestamp: now, balanceAfter: nextBalance });
+      tx.set(userRef.collection('transactions').doc(), { amount, type: 'payment', status: 'completed', details: `شراء كورس: ${common.courseName || courseId}`, courseId, paymentId: paymentRef.id, orderNumber, timestamp: now, balanceAfter: nextBalance, paymentMethod: 'wallet' });
       tx.set(purchaseRef, { uid, courseId, status: 'completed', amountPaid: amount, paymentId: paymentRef.id, orderNumber, paymentMethod: 'wallet', source: common.source, purchasedAt: now, updatedAt: now }, { merge: true });
     });
+
     const afterPurchase = await purchaseRef.get();
     if (afterPurchase.exists && afterPurchase.data()?.status === 'completed') {
       return { ok: true, alreadyPurchased: false, paymentId: afterPurchase.data()?.paymentId || paymentRef.id, orderNumber: afterPurchase.data()?.orderNumber || orderNumber, amountPaid: Number(afterPurchase.data()?.amountPaid || amount) };
