@@ -70,6 +70,32 @@ if (!admin.apps.length) {
   admin.initializeApp({ credential: admin.credential.cert(sa), projectId: sa.project_id });
 }
 const db = admin.firestore();
+
+/** يحوّل أي مصدر شراء قديم/جديد إلى مستند purchases الرسمي (يعالج حالات: users/{uid}/purchases القديمة، أو payments مكتملة بلا purchases). */
+const healPurchase = async (uid, courseId, extra) => {
+  try {
+    await db.collection('purchases').doc(`${uid}_${courseId}`).set({
+      uid, courseId, status: 'completed', ...extra, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (e) { console.error('healPurchase failed', e); }
+};
+/** مصدر واحد لحقيقة الاشتراك: نفس منطق التطبيق (purchases ← القديم ← payments المكتملة). */
+const hasEntitlement = async (uid, courseId) => {
+  const main = await db.collection('purchases').doc(`${uid}_${courseId}`).get();
+  if (main.exists && main.data()?.status === 'completed') return true;
+  const legacy = await db.collection('users').doc(uid).collection('purchases').doc(courseId).get();
+  if (legacy.exists && !['cancelled', 'refunded'].includes(String(legacy.data()?.status || ''))) {
+    await healPurchase(uid, courseId, { source: 'legacy' });
+    return true;
+  }
+  const pay = await db.collection('payments').where('uid', '==', uid).where('courseId', '==', courseId).where('status', '==', 'completed').limit(1).get();
+  if (!pay.empty) {
+    const d = pay.docs[0];
+    await healPurchase(uid, courseId, { paymentId: d.id, amountPaid: Number(d.data()?.amount || 0), orderNumber: String(d.data()?.orderNumber || ''), source: 'payments' });
+    return true;
+  }
+  return false;
+};
 const getBucket = () => admin.storage().bucket(); // lazy: لا يكسر النشر لو الـ bucket غير مضبوط
 
 // How long a signed video URL stays valid before the app must ask again.
@@ -109,10 +135,16 @@ exports.getSignedVideoUrl = onCall({ secrets: R2_SECRETS }, async (request) => {
   if (lesson.isPreview === true) {
     purchased = true;
   } else {
-    try {
-      const purchaseDoc = await db.collection("purchases").doc(`${uid}_${courseId}`).get();
-      purchased = purchaseDoc.exists && purchaseDoc.data()?.status === "completed";
-    } catch (_) {}
+    try { purchased = await hasEntitlement(uid, courseId); } catch (_) {}
+    if (!purchased) {
+      // الأدمن وصاحب الكورس يشاهدان كورسهما دائمًا
+      try {
+        const me = (await db.collection('users').doc(uid).get()).data() || {};
+        const isAdm = request.auth.token?.admin === true || me.isAdmin === true || me.role === 'admin';
+        const cs = (await db.collection('courses').doc(String(courseId)).get()).data() || {};
+        purchased = isAdm || [cs.instructorId, cs.ownerUid, cs.instructorUid, cs.createdBy].includes(uid);
+      } catch (_) {}
+    }
     if (!purchased) {
       try {
         const response = await fetch(`${R2_PUBLIC_BASE}/entitlements/${entitlementKey(uid, courseId)}.json`);
@@ -198,8 +230,7 @@ exports.getR2MediaUrl = onCall({ secrets: R2_SECRETS }, async (request) => {
       throw new HttpsError('permission-denied', 'ملف الدرس غير مطابق');
     }
     if (!adminUser && !lesson.isPreview) {
-      const purchase = await db.collection('purchases').doc(`${uid}_${courseId}`).get();
-      if (!purchase.exists || purchase.data()?.status !== 'completed') throw new HttpsError('permission-denied', 'لازم تشتري الكورس الأول');
+      if (!(await hasEntitlement(uid, courseId))) throw new HttpsError('permission-denied', 'لازم تشتري الكورس الأول');
     }
   }
   const signed = presignedUrl({ method: 'GET', key, expiresSeconds: 600 });
@@ -317,6 +348,16 @@ exports.purchaseCourse = onCall(async (request) => {
       const userForBalance = await tx.get(userRef);
       let balance = Number(walletSnap.data()?.balance);
       if (!Number.isFinite(balance)) balance = Number(userForBalance.data()?.balance);
+      if (!Number.isFinite(balance)) {
+        // نفس حساب صفحة المحفظة: السجل هو المصدر الأخير عند غياب wallets/users.balance
+        const txSnap = await tx.get(userRef.collection('transactions'));
+        balance = txSnap.docs.reduce((acc, d) => {
+          const t = d.data() || {};
+          if (['rejected', 'pending', 'cancelled'].includes(String(t.status || ''))) return acc;
+          const n = Number(t.amount || 0);
+          return ['deposit', 'earning', 'refund'].includes(String(t.type || '')) ? acc + n : acc - n;
+        }, 0);
+      }
       if (!Number.isFinite(balance)) balance = 0;
       if (balance + 0.0001 < amount) throw new HttpsError('failed-precondition', `رصيد المحفظة غير كافٍ. الرصيد الحالي ${balance.toFixed(2)} جنيه`);
       const nextBalance = Math.round((balance - amount) * 100) / 100;
@@ -358,8 +399,7 @@ exports.checkCourseAccess = onCall({ secrets: R2_SECRETS }, async (request) => {
   if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
   if (!courseId) throw new HttpsError('invalid-argument', 'courseId مطلوب');
   try {
-    const snap = await db.collection('purchases').doc(`${uid}_${courseId}`).get();
-    if (snap.exists) return { purchased: snap.data()?.status === 'completed', source: 'firebase' };
+    if (await hasEntitlement(uid, courseId)) return { purchased: true, source: 'firebase' };
   } catch (_) {}
   try {
     const response = await fetch(`${R2_PUBLIC_BASE}/entitlements/${entitlementKey(uid, courseId)}.json`);
@@ -380,7 +420,11 @@ exports.getMyPurchasedCourseIds = onCall({ secrets: R2_SECRETS }, async (request
   try {
     const snap = await db.collection('purchases').where('uid', '==', uid).where('status', '==', 'completed').get();
     const ids = snap.docs.map(d => String(d.data()?.courseId || '')).filter(Boolean);
-    if (ids.length) return { courseIds: [...new Set(ids)], source: 'firebase' };
+    const legacy = await db.collection('users').doc(uid).collection('purchases').get();
+    legacy.docs.forEach(d => { if (!['cancelled', 'refunded'].includes(String(d.data()?.status || ''))) ids.push(String(d.data()?.courseId || d.id)); });
+    const pays = await db.collection('payments').where('uid', '==', uid).where('status', '==', 'completed').get();
+    pays.docs.forEach(d => { if (d.data()?.courseId) ids.push(String(d.data().courseId)); });
+    if (ids.length) return { courseIds: [...new Set(ids.filter(Boolean))], source: 'firebase' };
   } catch (_) {}
   try {
     const response = await fetch(`${R2_PUBLIC_BASE}/users/${entitlementKey(uid, 'index')}.json`);
