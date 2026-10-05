@@ -128,11 +128,12 @@ export function CoursePurchaseDialog({
       setIsProcessing(false);
       toast({
         title: "تم شراء الكورس بنجاح!",
-        description: "تم خصم المبلغ من المحفظة وتسجيل العملية في Firebase."
+        description: paymentMethod === "balance" ? "تم خصم المبلغ من المحفظة وتسجيل العملية." : "تم تأكيد العملية وتفعيل الكورس في كورساتي."
       });
       onOpenChange(false);
       if (onPurchaseSuccess) onPurchaseSuccess();
-      router.push(`/courses/${course.id}`);
+      const paymentId = String(result.data?.paymentId || "");
+      router.push(paymentId ? `/order-complete?paymentId=${encodeURIComponent(paymentId)}` : `/courses/${course.id}`);
     } catch (error: any) {
       console.error("purchaseCourse failed", error);
       setIsProcessing(false);
