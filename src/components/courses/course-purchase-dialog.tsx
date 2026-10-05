@@ -25,7 +25,7 @@ import { isUserEnrolled, syncPurchasedCourses } from "@/lib/courses-data";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { getAuth } from "firebase/auth";
 import { collection, doc, getDocs, getDoc, getFirestore, query, where } from "firebase/firestore";
-import { initializeFirebase, useFirestore, useUser, useMemoFirebase, useDoc } from "@/firebase";
+import { initializeFirebase, useFirestore, useUser, useMemoFirebase, useDoc, useCollection } from "@/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
 import { R2MediaImage } from "@/components/r2-media-image";
@@ -59,6 +59,14 @@ export function CoursePurchaseDialog({
   const userRef = useMemoFirebase(() => (firestore && user?.uid) ? doc(firestore, "users", user.uid) : null, [firestore, user?.uid]);
   const { data: liveWallet } = useDoc(walletRef);
   const { data: liveProfile } = useDoc(userRef);
+  const txQuery = useMemoFirebase(() => (firestore && user?.uid) ? collection(firestore, "users", user.uid, "transactions") : null, [firestore, user?.uid]);
+  const { data: liveTransactions } = useCollection(txQuery);
+  // نفس طريقة حساب الرصيد في صفحة المحفظة: السجل هو المصدر الأخير عند غياب wallets/users.balance
+  const ledgerBalance = (liveTransactions || []).reduce((acc: number, tx: any) => {
+    if (["rejected", "pending", "cancelled"].includes(String(tx.status || ""))) return acc;
+    const n = Number(tx.amount || 0);
+    return ["deposit", "earning", "refund"].includes(String(tx.type || "")) ? acc + n : acc - n;
+  }, 0);
 
   const [paymentMethod, setPaymentMethod] = useState<"balance" | "vodafone_cash" | "orange_cash" | "etisalat_cash" | "we_pay" | "instapay" | "bank_transfer">("balance");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -86,12 +94,13 @@ export function CoursePurchaseDialog({
   }, [open]);
 
   useEffect(() => {
-    const wallet = Number(liveWallet?.balance);
-    const legacy = Number(liveProfile?.balance);
-    if (Number.isFinite(wallet)) setWalletBalance(Math.round(wallet * 100) / 100);
-    else if (Number.isFinite(legacy)) setWalletBalance(Math.round(legacy * 100) / 100);
-    else if (typeof currentBalance === "number" && Number.isFinite(currentBalance)) setWalletBalance(currentBalance);
-  }, [liveWallet?.balance, liveProfile?.balance, currentBalance]);
+    const hasValue = (v: any) => v !== undefined && v !== null && Number.isFinite(Number(v));
+    const wallet = liveWallet?.balance;
+    const legacy = liveProfile?.balance;
+    if (hasValue(wallet)) setWalletBalance(Math.round(Number(wallet) * 100) / 100);
+    else if (hasValue(legacy)) setWalletBalance(Math.round(Number(legacy) * 100) / 100);
+    else setWalletBalance(Math.round(ledgerBalance * 100) / 100);
+  }, [liveWallet?.balance, liveProfile?.balance, ledgerBalance]);
 
   if (!course) return null;
 
