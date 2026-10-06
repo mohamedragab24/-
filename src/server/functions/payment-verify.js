@@ -12,7 +12,7 @@ const admin = require('firebase-admin');
 const getDb = () => admin.firestore();
 const FV = () => admin.firestore.FieldValue;
 
-// عدد دقائق السماح قبل وقت الطلب (الافتراضي 10: يتحمل فرق ساعة الجوال عن الخادم ويمنع رسائل قديمة جدًا)
+// نافذة القبول: تُقبل العملية حتى 10 دقائق قبل وقت الطلب (بالدقيقة، لتحمل فرق ساعة الجوال)، وترفض إذا سبقته بـ 11 دقيقة أو أكثر
 const GRACE_MINUTES = Number(process.env.PAYMENT_MATCH_GRACE_MINUTES || 10);
 // مدة صلاحية الطلب المعلّق بالدقائق
 const ORDER_TTL_MINUTES = Number(process.env.PAYMENT_ORDER_TTL_MINUTES || 180);
@@ -119,8 +119,11 @@ function isMatch(payment, tx) {
   if (!tx.timeMs) return false;
   const orderMs = toMs(payment.createdAt);
   if (!orderMs) return false;
-  // العملية يجب ألا تسبق وقت الطلب (بالدقيقة) — مع سماح اختياري
-  return floorMinute(tx.timeMs) >= floorMinute(orderMs) - GRACE_MINUTES * 60000;
+  // المقارنة بالدقيقة (مثل ما يظهر للمستخدم HH:mm):
+  //  - قبل الطلب بـ 10 دقائق أو أقل: مقبولة   | قبل الطلب بـ 11 دقيقة أو أكثر: مرفوضة
+  //  - بعد الطلب: مقبولة طالما الطلب لم تنتهِ صلاحيته (ORDER_TTL_MINUTES)
+  const tMin = floorMinute(tx.timeMs), oMin = floorMinute(orderMs);
+  return tMin >= oMin - GRACE_MINUTES * 60000 && tMin <= oMin + ORDER_TTL_MINUTES * 60000;
 }
 
 /** يؤكد الطلب بشكل ذري ويفعّل الكورس. يرجع true لو تم التأكيد. */
@@ -207,10 +210,11 @@ async function ingestPaymentMessage({ text, docId, dateMs, source }) {
   const pending = await db.collection('payments').where('paymentPhoneKey', '==', parsed.phoneKey).where('status', '==', 'pending_verification').get();
   const txData = { ...parsed, used: false };
   const results = [];
+  const orders = [];
   for (const p of pending.docs) {
-    if (isMatch(p.data(), txData) && await confirmPaymentWithTx(p.id, docId)) { results.push(p.id); break; }
+    if (isMatch(p.data(), txData) && await confirmPaymentWithTx(p.id, docId)) { results.push(p.id); orders.push(String(p.data().orderNumber || '')); break; }
   }
-  return { parseOk: true, parsed, confirmed: results };
+  return { parseOk: true, parsed, confirmed: results, orders };
 }
 
 /** رد اختياري على تليجرام (يتطلب TELEGRAM_BOT_TOKEN). */
@@ -225,4 +229,4 @@ async function telegramReply(chatId, text) {
   } catch (e) { console.error('telegram reply failed', e); }
 }
 
-module.exports = { parsePaymentMessage, phoneKey, normalizeDigits, tryConfirmPayment, ingestPaymentMessage, telegramReply, ORDER_TTL_MINUTES };
+module.exports = { isMatch, parsePaymentMessage, phoneKey, normalizeDigits, tryConfirmPayment, ingestPaymentMessage, telegramReply, ORDER_TTL_MINUTES };
