@@ -179,7 +179,7 @@ function CheckoutContent() {
           </div>
 
           <div className="pt-8 border-t space-y-4">
-            <Button onClick={() => router.push(`/meeting/${requestId}`)} className="w-full h-20 rounded-[2rem] font-black text-2xl bg-primary shadow-xl hover:scale-[1.02] transition-all">
+            <Button onClick={() => { window.location.href = `fahmny://meeting/${requestId}`; }} className="w-full h-20 rounded-[2rem] font-black text-2xl bg-primary shadow-xl hover:scale-[1.02] transition-all">
               الانتقال للمحاضرة المباشرة <ArrowRight className="mr-2 rotate-180" />
             </Button>
             <Button variant="ghost" onClick={() => window.print()} className="w-full h-12 rounded-xl font-bold text-zinc-400">

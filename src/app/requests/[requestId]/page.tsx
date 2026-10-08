@@ -254,7 +254,7 @@ export default function RequestDetailsPage() {
                       <p className="text-lg text-green-700 font-bold">تم تأمين الرصيد بنجاح. اضغط أدناه للدخول للغرفة المباشرة.</p>
                     </div>
                     <Button 
-                      onClick={() => router.push(`/meeting/${request.id}`)} 
+                      onClick={() => { window.location.href = `fahmny://meeting/${request.id}`; }} 
                       className="h-20 px-16 rounded-[2rem] bg-green-600 hover:bg-green-700 font-black text-2xl shadow-2xl shadow-green-600/20 transition-all hover:scale-105"
                     >
                       دخول المحاضرة الآن

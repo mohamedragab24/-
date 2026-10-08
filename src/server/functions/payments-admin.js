@@ -52,7 +52,7 @@ exports.createWalletTopup = onCall(async (request) => {
     email: String(request.auth.token?.email || user.email || ''), phone: String(user.phone || ''),
     paymentPhone: phone, paymentPhoneKey: pv.phoneKey(phone), publicId: String(user.publicId || ''),
     status: 'pending_verification', paymentMethod, paymentMethodName: String(method.name || paymentMethod),
-    paymentAccounts: accountsOf(method), source: String(request.data?.source || 'web'), createdAt: FV.serverTimestamp(),
+    paymentAccounts: accountsOf(method), providerKey: String(method.providerKey || ''), providerName: String(method.providerName || ''), serviceName: String(method.name || ''), paymentGroup: String(method.group || ''), source: String(request.data?.source || 'web'), createdAt: FV.serverTimestamp(),
   });
   let status = 'pending_verification';
   try { status = (await pv.tryConfirmPayment(ref.id)).status; } catch (e) { console.error('instant topup verify failed', e); }
@@ -110,4 +110,70 @@ exports.adminCheckTransactionStatus = onCall(async (request) => {
     providerKey = p?.key || '';
   }
   return pv.checkTransactionStatus({ txId, providerKey, orderNumber, amount: request.data?.amount });
+});
+
+
+/* ---------- بوابات الدفع (إدارة المحافظ): تُحفظ مع مزود الخدمة المطابق لتطبيق البوابة/البوت ---------- */
+const GROUPS = ['wallet', 'instapay', 'telda', 'card', 'bank'];
+
+/** يعيد حساب مزود الدفع (paymentProviders) من البوابات الحالية: مفعّل لو فيه بوابة مفعّلة بنفس المزود. */
+async function resyncProvider(providerKey) {
+  if (!providerKey) return;
+  const snap = await db.collection('paymentMethods').where('providerKey', '==', providerKey).get();
+  const ref = db.collection('paymentProviders').doc(providerKey);
+  if (snap.empty) { await ref.delete().catch(() => {}); return; }
+  const docs = snap.docs.map((d) => d.data());
+  const aliases = Array.from(new Set(docs.flatMap((m) => [m.providerName, m.name, ...(Array.isArray(m.senderAliases) ? m.senderAliases : [])]).map((x) => String(x || '').trim()).filter(Boolean)));
+  await ref.set({ key: providerKey, name: String(docs[0].providerName || ''), aliases, active: docs.some((m) => m.active !== false), updatedAt: FV.serverTimestamp() }, { merge: true });
+  pv.loadProviders(true).catch(() => {});
+}
+
+exports.adminSaveGateway = onCall(async (request) => {
+  if (!(await isAdminReq(request))) throw new HttpsError('permission-denied', 'للأدمن فقط');
+  const d = request.data || {};
+  const id = String(d.id || '').trim();
+  const group = String(d.group || '').trim();
+  const name = String(d.name || '').trim().slice(0, 80);
+  const providerName = String(d.providerName || '').trim().slice(0, 80);
+  const providerKey = String(d.providerKey || '').trim();
+  const number = String(d.number || '').trim().slice(0, 40);
+  const logoUrl = String(d.logoUrl || '');
+  if (!GROUPS.includes(group)) throw new HttpsError('invalid-argument', 'اختر مجموعة الدفع');
+  if (!name) throw new HttpsError('invalid-argument', 'اكتب اسم الخدمة');
+  if (providerName.length < 3 || !/^[A-Za-z0-9_]+$/.test(providerKey)) throw new HttpsError('invalid-argument', 'اكتب اسم مزود الخدمة (3 أحرف على الأقل)');
+  if (number.replace(/[^\d+]/g, '').length < 5) throw new HttpsError('invalid-argument', 'اكتب الرقم الذي سيتم التحويل عليه');
+  if (logoUrl && (!/^data:image\/(png|jpeg|webp);base64,/.test(logoUrl) || logoUrl.length > 150000)) throw new HttpsError('invalid-argument', 'صورة المزود غير صالحة أو كبيرة');
+
+  const data = {
+    group, name, providerName, providerKey, accountNumber: number, accounts: [{ label: name, number }],
+    logoUrl, sortOrder: Number(d.sortOrder) || 1, active: d.active !== false, updatedAt: FV.serverTimestamp(),
+  };
+  let oldKey = '';
+  let ref;
+  if (id) {
+    ref = db.collection('paymentMethods').doc(id);
+    const old = await ref.get();
+    if (!old.exists) throw new HttpsError('not-found', 'البوابة غير موجودة');
+    oldKey = String(old.data()?.providerKey || '');
+    await ref.set(data, { merge: true });
+  } else {
+    ref = db.collection('paymentMethods').doc();
+    await ref.set({ ...data, createdAt: FV.serverTimestamp() });
+  }
+  await resyncProvider(providerKey);
+  if (oldKey && oldKey !== providerKey) await resyncProvider(oldKey);
+  return { ok: true, id: ref.id };
+});
+
+exports.adminDeleteGateway = onCall(async (request) => {
+  if (!(await isAdminReq(request))) throw new HttpsError('permission-denied', 'للأدمن فقط');
+  const id = String(request.data?.id || '').trim();
+  if (!id) throw new HttpsError('invalid-argument', 'بيانات غير صحيحة');
+  const ref = db.collection('paymentMethods').doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) return { ok: true };
+  const key = String(snap.data()?.providerKey || '');
+  await ref.delete();
+  await resyncProvider(key);
+  return { ok: true };
 });

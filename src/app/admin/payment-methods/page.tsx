@@ -1,120 +1,135 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Plus, WalletCards, Pencil, Trash2, Save, X, Minus } from "lucide-react";
+import { Plus, WalletCards, Pencil, Trash2, Save, X, ImagePlus } from "lucide-react";
 import { useCollection, useFirestore, useUser, useMemoFirebase } from "@/firebase";
-import { collection, addDoc, updateDoc, deleteDoc, doc, query, orderBy } from "firebase/firestore";
+import { collection, query, orderBy } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
+import { callGroupFn, fnErrorMessage } from "@/lib/groups";
+import { GatewayLogo } from "@/components/payment/payment-method-picker";
+import { GATEWAY_TEMPLATES, PAYMENT_GROUPS, gatewayGroup, gatewayNumber, logoFileToDataUrl, providerKeyFor, type PaymentGroupKey } from "@/lib/payment-groups";
 
-type Account = { label: string; number: string };
-
-// قوالب سريعة: تملأ النموذج فقط (لا تُحفظ حتى تضغط "إضافة")
-const TEMPLATES: { title: string; name: string; accounts: Account[] }[] = [
-  { title: "قالب المحافظ الإلكترونية", name: "المحافظ الإلكترونية", accounts: [
-    { label: "فودافون كاش", number: "" }, { label: "أورنج كاش", number: "" }, { label: "اتصالات كاش", number: "" }, { label: "وي باي", number: "" },
-  ] },
-  { title: "قالب إنستا باي", name: "إنستا باي", accounts: [{ label: "", number: "" }] },
-];
-
-/** يوحّد الشكل القديم (accountNumber) والجديد (accounts[]) */
-const getAccounts = (m: any): Account[] => {
-  const list = Array.isArray(m?.accounts) ? m.accounts.map((a: any) => ({ label: String(a?.label || ""), number: String(a?.number || "") })).filter((a: Account) => a.number) : [];
-  if (!list.length && m?.accountNumber) list.push({ label: "", number: String(m.accountNumber) });
-  return list;
-};
-
+/**
+ * إدارة المحافظ (بوابات الدفع). كل بوابة = خدمة واحدة تظهر للمستخدم تحت مجموعتها:
+ *  - اسم الخدمة: كما يراه المستخدم (فودافون كاش / تحويل برقم الموبايل ...)
+ *  - اسم مزود الخدمة: يجب أن يطابق «طريقة الدفع» في تطبيق البوابة والبوت، وإلا تُرفض العملية
+ *  - الرقم الذي يُحوَّل عليه + شعار المزود
+ */
 export default function AdminPaymentMethodsPage() {
   const { user } = useUser();
   const firestore = useFirestore();
   const { toast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [group, setGroup] = useState<PaymentGroupKey>("wallet");
   const [name, setName] = useState("");
-  const [accounts, setAccounts] = useState<Account[]>([{ label: "", number: "" }]);
+  const [providerName, setProviderName] = useState("");
+  const [number, setNumber] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
   const [sortOrder, setSortOrder] = useState("1");
   const [active, setActive] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const methodsQuery = useMemoFirebase(() => (firestore ? query(collection(firestore, "paymentMethods"), orderBy("sortOrder", "asc")) : null), [firestore]);
-  const { data: methods, isLoading } = useCollection(methodsQuery);
+  const { data: methods, isLoading } = useCollection<any>(methodsQuery);
 
-  const reset = () => { setEditingId(null); setName(""); setAccounts([{ label: "", number: "" }]); setSortOrder("1"); setActive(true); };
+  const reset = () => { setEditingId(null); setGroup("wallet"); setName(""); setProviderName(""); setNumber(""); setLogoUrl(""); setSortOrder("1"); setActive(true); if (fileRef.current) fileRef.current.value = ""; };
   const startEdit = (m: any) => {
-    setEditingId(m.id); setName(m.name || "");
-    const a = getAccounts(m); setAccounts(a.length ? a : [{ label: "", number: "" }]);
-    setSortOrder(String(m.sortOrder || 1)); setActive(m.active !== false);
+    setEditingId(m.id); setGroup(gatewayGroup(m) === "other" ? "wallet" : gatewayGroup(m));
+    setName(m.name || ""); setProviderName(m.providerName || m.name || ""); setNumber(gatewayNumber(m));
+    setLogoUrl(m.logoUrl || ""); setSortOrder(String(m.sortOrder || 1)); setActive(m.active !== false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
-  const setAcc = (i: number, patch: Partial<Account>) => setAccounts((prev) => prev.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+
+  const pickLogo = async (f?: File | null) => {
+    if (!f) return;
+    try { setLogoUrl(await logoFileToDataUrl(f)); } catch (e: any) { toast({ variant: "destructive", title: "تعذر رفع الصورة", description: e?.message }); }
+  };
 
   const save = async () => {
-    const clean = accounts.map((a) => ({ label: a.label.trim(), number: a.number.trim() })).filter((a) => a.number);
-    if (!firestore || !name.trim() || clean.length === 0) {
-      toast({ variant: "destructive", title: "بيانات ناقصة", description: "اكتب اسم الوسيلة وأضف رقمًا واحدًا على الأقل." });
+    if (!name.trim() || !providerName.trim() || !number.trim()) {
+      toast({ variant: "destructive", title: "بيانات ناقصة", description: "اكتب اسم الخدمة واسم مزود الخدمة والرقم الذي سيتم التحويل عليه." });
       return;
     }
     setBusy(true);
     try {
-      const data = {
-        name: name.trim(),
-        accounts: clean,
-        accountNumber: clean[0].number, // للتوافق مع الشاشات القديمة
-        sortOrder: Number(sortOrder) || 1,
-        active,
-        updatedAt: new Date(),
-      };
-      if (editingId) await updateDoc(doc(firestore, "paymentMethods", editingId), data);
-      else await addDoc(collection(firestore, "paymentMethods"), { ...data, createdAt: new Date() });
-      toast({ title: editingId ? "تم تعديل وسيلة الدفع" : "تمت إضافة وسيلة الدفع" });
+      await callGroupFn("adminSaveGateway", {
+        id: editingId || "", group, name: name.trim(), providerName: providerName.trim(), providerKey: providerKeyFor(providerName),
+        number: number.trim(), logoUrl, sortOrder: Number(sortOrder) || 1, active,
+      });
+      toast({ title: editingId ? "تم تعديل بوابة الدفع" : "تمت إضافة بوابة الدفع" });
       reset();
-    } catch {
-      toast({ variant: "destructive", title: "تعذر الحفظ" });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: fnErrorMessage(e) });
     } finally { setBusy(false); }
   };
 
   const remove = async (id: string) => {
-    if (!firestore || !confirm("هل تريد حذف وسيلة الدفع؟")) return;
-    try { await deleteDoc(doc(firestore, "paymentMethods", id)); toast({ title: "تم حذف وسيلة الدفع" }); }
-    catch { toast({ variant: "destructive", title: "تعذر الحذف" }); }
+    if (!confirm("هل تريد حذف بوابة الدفع؟")) return;
+    try { await callGroupFn("adminDeleteGateway", { id }); toast({ title: "تم الحذف" }); }
+    catch (e: any) { toast({ variant: "destructive", title: "تعذر الحذف", description: fnErrorMessage(e) }); }
   };
 
   if (!user) return <div className="p-20 text-center font-black">يجب تسجيل الدخول.</div>;
+
+  const list = methods || [];
+  const sections = [...PAYMENT_GROUPS.map((g) => ({ key: g.key as PaymentGroupKey, title: g.title })), { key: "other" as PaymentGroupKey, title: "بوابات قديمة (بدون مجموعة)" }]
+    .map((g) => ({ ...g, items: list.filter((m: any) => gatewayGroup(m) === g.key) })).filter((g) => g.items.length > 0);
 
   return (
     <div className="p-6 md:p-10 space-y-8" dir="rtl">
       <div className="border-r-8 border-primary pr-5">
         <h1 className="text-4xl font-black">إدارة المحافظ</h1>
-        <p className="text-muted-foreground font-bold mt-2">كل وسيلة دفع (مثل «المحافظ الإلكترونية» أو «إنستا باي») تحتوي أرقامها، وتظهر هذه الأرقام للمستفهم تحتها عند اختيارها. يتم تأكيد الدفع تلقائيًا عبر بوت تليجرام.</p>
+        <p className="text-muted-foreground font-bold mt-2">أضف بوابات الدفع التي تظهر للمستخدم عند الشراء وشحن المحفظة. يتم تأكيد الدفع تلقائيًا إذا تطابق اسم مزود الخدمة بين المنصة وتطبيق البوابة والبوت، وإلا تُرفض العملية.</p>
       </div>
 
       <Card className="rounded-[2rem] shadow-lg">
-        <CardHeader><CardTitle className="flex items-center gap-2"><Plus className="text-primary" /> {editingId ? "تعديل وسيلة دفع" : "إضافة وسيلة دفع"}</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Plus className="text-primary" /> {editingId ? "تعديل بوابة دفع" : "إضافة بوابة دفع"}</CardTitle></CardHeader>
         <CardContent className="space-y-5">
-          <div className="flex flex-wrap gap-2">
-            {TEMPLATES.map((t) => (
-              <Button key={t.title} type="button" variant="secondary" className="rounded-xl font-bold" onClick={() => { setName(t.name); setAccounts(t.accounts.map((a) => ({ ...a }))); }}>{t.title}</Button>
-            ))}
-          </div>
-          <div className="grid md:grid-cols-3 gap-4 items-end">
-            <div className="md:col-span-1"><Label>اسم الوسيلة</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="المحافظ الإلكترونية" /></div>
-            <div><Label>الترتيب</Label><Input type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} /></div>
-            <div className="flex items-center justify-between gap-3 h-10"><div><Label>مفعلة</Label><p className="text-xs text-muted-foreground">تظهر في الشراء</p></div><Switch checked={active} onCheckedChange={setActive} /></div>
+          <div className="space-y-2">
+            <Label>المجموعة</Label>
+            <div className="flex flex-wrap gap-2">
+              {PAYMENT_GROUPS.map((g) => (
+                <Button key={g.key} type="button" variant={group === g.key ? "default" : "outline"} className="rounded-xl font-bold" onClick={() => setGroup(g.key)}>{g.title}</Button>
+              ))}
+            </div>
           </div>
 
-          <div className="space-y-3">
-            <Label>الأرقام التي تستقبل التحويل</Label>
-            {accounts.map((a, i) => (
-              <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-                <Input value={a.label} onChange={(e) => setAcc(i, { label: e.target.value })} placeholder="اسم المحفظة (مثال: فودافون كاش)" />
-                <Input value={a.number} onChange={(e) => setAcc(i, { number: e.target.value })} placeholder="01xxxxxxxxx" dir="ltr" />
-                <Button type="button" variant="outline" size="icon" className="rounded-xl" disabled={accounts.length === 1} onClick={() => setAccounts((p) => p.filter((_, idx) => idx !== i))}><Minus className="h-4 w-4" /></Button>
+          {!editingId && (
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">قوالب سريعة (تملأ الاسم فقط)</Label>
+              <div className="flex flex-wrap gap-2">
+                {GATEWAY_TEMPLATES.filter((t) => t.group === group).map((t) => (
+                  <Button key={t.name} type="button" variant="secondary" size="sm" className="rounded-xl font-bold" onClick={() => { setName(t.name); setProviderName(t.providerName); }}>{t.name}</Button>
+                ))}
               </div>
-            ))}
-            <Button type="button" variant="outline" className="rounded-xl font-bold" onClick={() => setAccounts((p) => [...p, { label: "", number: "" }])}><Plus className="ml-2 h-4 w-4" />إضافة رقم آخر</Button>
+            </div>
+          )}
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <div><Label>اسم الخدمة (كما يظهر للمستخدم)</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="فودافون كاش" /></div>
+            <div><Label>اسم مزود الخدمة</Label><Input value={providerName} onChange={(e) => setProviderName(e.target.value)} placeholder="فودافون كاش" />
+              <p className="text-[11px] text-muted-foreground mt-1">اكتبه تمامًا مثل «اسم مزود الخدمة» المضاف في تطبيق بوابة الدفع (مثل VF-Cash أو فودافون كاش)؛ أي اختلاف = رفض العملية.</p></div>
+            <div><Label>الرقم الذي سيتم التحويل عليه</Label><Input value={number} onChange={(e) => setNumber(e.target.value)} placeholder="01xxxxxxxxx" dir="ltr" /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><Label>الترتيب</Label><Input type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} /></div>
+              <div className="flex items-center justify-between gap-3 h-10 mt-6"><Label>مفعلة</Label><Switch checked={active} onCheckedChange={setActive} /></div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <GatewayLogo m={{ name, logoUrl }} size={64} />
+            <div className="space-y-1">
+              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => pickLogo(e.target.files?.[0])} />
+              <Button type="button" variant="outline" className="rounded-xl font-bold" onClick={() => fileRef.current?.click()}><ImagePlus className="ml-2 h-4 w-4" />{logoUrl ? "تغيير صورة المزود" : "رفع صورة المزود"}</Button>
+              {logoUrl && <Button type="button" variant="ghost" size="sm" className="text-red-600" onClick={() => { setLogoUrl(""); if (fileRef.current) fileRef.current.value = ""; }}>إزالة الصورة</Button>}
+              <p className="text-[11px] text-muted-foreground">تظهر بجانب الخدمة في اختيار الدفع، وفي شحن المحفظة، وفي إيصال الطلب.</p>
+            </div>
           </div>
 
           <div className="flex gap-2 flex-wrap">
@@ -125,21 +140,26 @@ export default function AdminPaymentMethodsPage() {
       </Card>
 
       <Card className="rounded-[2rem] shadow-lg overflow-hidden">
-        <CardHeader><CardTitle className="flex items-center gap-2"><WalletCards className="text-primary" /> طرق الدفع الحالية</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
+        <CardHeader><CardTitle className="flex items-center gap-2"><WalletCards className="text-primary" /> بوابات الدفع الحالية</CardTitle></CardHeader>
+        <CardContent className="space-y-6">
           {isLoading ? <p className="text-center p-8">جارٍ التحميل...</p>
-            : (methods || []).length === 0 ? <p className="text-center p-8 text-muted-foreground font-bold">لا توجد وسائل دفع بعد. استخدم أحد القوالب أو أضف وسيلة جديدة.</p>
-            : (methods || []).map((m: any) => (
-              <div key={m.id} className="flex flex-col md:flex-row md:items-center gap-4 p-4 rounded-2xl border bg-white">
-                <div className="flex-1 space-y-1">
-                  <div className="font-black text-lg">{m.name}</div>
-                  {getAccounts(m).map((a, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm"><span className="text-zinc-500 font-bold">{a.label || "رقم"}:</span><span className="font-mono text-primary font-black" dir="ltr">{a.number}</span></div>
-                  ))}
-                </div>
-                <Badge className={m.active === false ? "bg-zinc-200 text-zinc-700" : "bg-emerald-100 text-emerald-700"}>{m.active === false ? "موقوفة" : "مفعلة"}</Badge>
-                <Button variant="outline" onClick={() => startEdit(m)} className="rounded-xl"><Pencil className="ml-2 h-4 w-4" />تعديل</Button>
-                <Button variant="destructive" onClick={() => remove(m.id)} className="rounded-xl"><Trash2 className="ml-2 h-4 w-4" />حذف</Button>
+            : sections.length === 0 ? <p className="text-center p-8 text-muted-foreground font-bold">لا توجد بوابات دفع بعد. اختر مجموعة وأضف أول خدمة.</p>
+            : sections.map((s) => (
+              <div key={s.key} className="space-y-3">
+                <h3 className="font-black text-lg border-r-4 border-primary pr-3">{s.title}</h3>
+                {s.items.map((m: any) => (
+                  <div key={m.id} className="flex flex-col md:flex-row md:items-center gap-4 p-4 rounded-2xl border bg-white">
+                    <GatewayLogo m={m} size={48} />
+                    <div className="flex-1 space-y-1">
+                      <div className="font-black text-lg">{m.name}</div>
+                      <div className="text-xs text-zinc-500 font-bold">مزود الخدمة: <span className="text-zinc-800">{m.providerName || "—"}</span></div>
+                      <div className="font-mono text-primary font-black text-sm" dir="ltr">{gatewayNumber(m)}</div>
+                    </div>
+                    <Badge className={m.active === false ? "bg-zinc-200 text-zinc-700" : "bg-emerald-100 text-emerald-700"}>{m.active === false ? "موقوفة" : "مفعلة"}</Badge>
+                    <Button variant="outline" onClick={() => startEdit(m)} className="rounded-xl"><Pencil className="ml-2 h-4 w-4" />تعديل</Button>
+                    <Button variant="destructive" onClick={() => remove(m.id)} className="rounded-xl"><Trash2 className="ml-2 h-4 w-4" />حذف</Button>
+                  </div>
+                ))}
               </div>
             ))}
         </CardContent>

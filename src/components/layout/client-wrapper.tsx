@@ -5,6 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { Header } from '@/components/layout/header';
 import { Footer } from '@/components/layout/footer';
 import { Toaster } from '@/components/ui/toaster';
+import { ErrorCenter } from '@/components/ErrorCenter';
 import { FirebaseClientProvider } from '@/firebase/client-provider';
 import { useFirestore, useDoc, useMemoFirebase, useUser } from '@/firebase';
 import { syncPurchasedCourses } from '@/lib/courses-data';
@@ -82,6 +83,7 @@ export function ClientWrapper({ children }: ClientWrapperProps) {
             {mounted && <PWAInstallBanner />}
             <FloatingChat />
             <Toaster />
+            <ErrorCenter />
           </div>
         </SidebarProvider>
       </ThemeManager>

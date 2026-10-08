@@ -26,6 +26,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       title: "عام والنظام",
       items: [
         { label: "الإحصائيات", href: "/admin", icon: LayoutDashboard },
+        { label: "فحص النظام والأخطاء", href: "/admin/system-check", icon: Activity },
         { label: "سجل الرقابة", href: "/admin/logs", icon: History },
         { label: "المزامنة vNext", href: "/admin/deployment", icon: CloudUpload },
         { label: "الذكاء الاصطناعي", href: "/admin/ai", icon: Bot },

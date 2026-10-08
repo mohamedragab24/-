@@ -109,7 +109,7 @@ function cairoLocalToUtcMs(y, mo, d, h, mi) {
 function parsePaymentMessage(text, fallbackDateMs) {
   const raw = String(text || '');
   const t = normalizeDigits(raw);
-  const out = { amount: null, phone: '', phoneKey: '', txId: '', timeMs: null, providerName: '' };
+  const out = { amount: null, phone: '', phoneKey: '', txId: '', timeMs: null, providerName: '', methodName: '' };
 
   // المبلغ
   const amountPatterns = [
@@ -133,9 +133,12 @@ function parsePaymentMessage(text, fallbackDateMs) {
   const idMatch = t.match(/(?:رقم\s*(?:العملية|المعاملة|المرجع|العمليه)|المرجع|transaction\s*(?:id|no\.?|number)?|trx\s*(?:id)?|txn\s*(?:id)?|ref(?:erence)?(?:\s*(?:no\.?|number|id))?|id)\s*[:：#\-]?\s*([A-Za-z0-9]{6,})/i);
   if (idMatch) out.txId = idMatch[1];
 
-  // طريقة الدفع/المزود (يرسلها تطبيق بوابة الدفع في سطر "طريقة الدفع: ...")
-  const provMatch = t.match(/(?:طريقة\s*الدفع|payment\s*method|provider|المزود)\s*[:：]\s*([^\n\r]+)/i);
-  if (provMatch) out.providerName = provMatch[1].trim();
+  // مزود الخدمة (سطر "مزود الخدمة: ...") وطريقة الدفع (سطر "طريقة الدفع: ..." = محفظة/إنستا باي/...) كما أُضيفا في تطبيق البوابة.
+  // توافق مع النسخ القديمة: لو لا يوجد سطر "مزود الخدمة" يُعتبر "طريقة الدفع" هو اسم المزود.
+  const provLine = t.match(/(?:مزود\s*الخدمة|provider|المزود)\s*[:：]\s*([^\n\r]+)/i);
+  const methLine = t.match(/(?:طريقة\s*الدفع|payment\s*method)\s*[:：]\s*([^\n\r]+)/i);
+  if (provLine) { out.providerName = provLine[1].trim(); if (methLine) out.methodName = methLine[1].trim(); }
+  else if (methLine) out.providerName = methLine[1].trim();
 
   // التاريخ والوقت  (dd-mm-yy HH:mm) أو (dd/mm/yyyy HH:mm) أو (yyyy-mm-dd HH:mm)
   // ملاحظة: علامة ص/م تُقرأ فقط إذا كانت ملاصقة للوقت وليست بداية كلمة (مثل "من") وإلا تتحول الساعة خطأً إلى PM
@@ -163,12 +166,14 @@ function parsePaymentMessage(text, fallbackDateMs) {
 const floorMinute = (ms) => Math.floor(ms / 60000) * 60000;
 const toMs = (ts) => (ts && typeof ts.toMillis === 'function' ? ts.toMillis() : (ts ? new Date(ts).getTime() : 0));
 
-function isMatch(payment, tx) {
+function isMatch(payment, tx, opts = {}) {
   if (!payment || !tx) return false;
   if (payment.status !== 'pending_verification' || tx.used) return false;
   if (!tx.phoneKey || phoneKey(payment.paymentPhone) !== tx.phoneKey) return false;
   if (!Number.isFinite(tx.amount) || Math.abs(Number(payment.amount) - Number(tx.amount)) > 0.01) return false;
   if (!tx.timeMs) return false;
+  // اسم مزود الخدمة يجب أن يتطابق: المنصة (طريقة الدفع المختارة) = تطبيق البوابة/البوت (سطر «طريقة الدفع»)
+  if (!opts.ignoreProvider && providerMismatch(payment, tx)) return false;
   const orderMs = toMs(payment.createdAt);
   if (!orderMs) return false;
   // المقارنة بالدقيقة (مثل ما يظهر للمستخدم HH:mm):
@@ -176,6 +181,29 @@ function isMatch(payment, tx) {
   //  - بعد الطلب: مقبولة طالما الطلب لم تنتهِ صلاحيته (ORDER_TTL_MINUTES)
   const tMin = floorMinute(tx.timeMs), oMin = floorMinute(orderMs);
   return tMin >= oMin - GRACE_MINUTES * 60000 && tMin <= oMin + ORDER_TTL_MINUTES * 60000;
+}
+
+
+/** الطلب اختار مزودًا (providerKey) والعملية القادمة من مزود آخر ← غير متطابق. الطلبات القديمة بلا providerKey تُتجاهل. */
+function providerMismatch(payment, tx) {
+  const want = String(payment?.providerKey || '');
+  if (!want) return false;
+  return String(tx?.providerKey || '') !== want;
+}
+
+/** رفض الطلب والعملية معًا عند اختلاف اسم مزود الخدمة (باقي بيانات العملية مطابقة). */
+async function rejectProviderMismatch(paymentId, txDocId) {
+  const db = getDb();
+  const payRef = db.collection('payments').doc(paymentId);
+  const txRef = db.collection('telegramTransactions').doc(txDocId);
+  await db.runTransaction(async (t) => {
+    const [paySnap, txSnap] = await Promise.all([t.get(payRef), t.get(txRef)]);
+    if (!paySnap.exists || !txSnap.exists) return;
+    if (paySnap.data().status !== 'pending_verification' || txSnap.data().used) return;
+    const now = FV().serverTimestamp();
+    t.update(payRef, { status: 'rejected', rejectReason: 'provider_mismatch', rejectNote: 'اسم مزود الخدمة في العملية لا يطابق طريقة الدفع المختارة', rejectedAt: now });
+    t.update(txRef, { used: true, reviewStatus: 'rejected', rejectReason: 'provider_mismatch', rejectedPaymentId: paymentId, reviewedAt: now });
+  });
 }
 
 /** رصيد المحفظة الحالي داخل transaction (نفس منطق adminAdjustWallet). كل القراءات هنا قبل أي كتابة. */
@@ -305,7 +333,10 @@ async function tryConfirmPayment(paymentId) {
   if (!key) return { status: 'pending_verification' };
   const txs = await db.collection('telegramTransactions').where('phoneKey', '==', key).where('used', '==', false).get();
   for (const d of txs.docs) {
-    if (!isMatch(payment, d.data())) continue;
+    if (!isMatch(payment, d.data())) {
+      if (isMatch(payment, d.data(), { ignoreProvider: true })) { await rejectProviderMismatch(paymentId, d.id); return { status: 'rejected', reason: 'provider_mismatch' }; }
+      continue;
+    }
     const r = await confirmPaymentWithTx(paymentId, d.id);
     if (r.ok) return { status: 'completed' };
     if (r.duplicate) return { status: 'rejected', reason: 'duplicate_transaction' };
@@ -323,7 +354,7 @@ async function ingestPaymentMessage({ text, docId, dateMs, source }) {
   const provider = matchProvider(await loadProviders(), text, parsed.providerName);
   const base = {
     rawText: String(text || '').slice(0, 2000), source: source || 'telegram',
-    amount: parsed.amount, phone: parsed.phone, phoneKey: parsed.phoneKey, txId: parsed.txId, timeMs: parsed.timeMs, parseOk,
+    amount: parsed.amount, methodName: parsed.methodName || '', phone: parsed.phone, phoneKey: parsed.phoneKey, txId: parsed.txId, timeMs: parsed.timeMs, parseOk,
     providerKey: provider?.key || '', providerName: provider?.name || parsed.providerName || '', receivedAt: FV().serverTimestamp(),
   };
 
@@ -354,13 +385,17 @@ async function ingestPaymentMessage({ text, docId, dateMs, source }) {
   const pending = await db.collection('payments').where('paymentPhoneKey', '==', parsed.phoneKey).where('status', '==', 'pending_verification').get();
   const txData = { ...parsed, providerKey: provider.key, providerName: provider.name, used: false };
   const results = []; const orders = []; let rejectedDuplicate = false;
+  let providerMismatchRejected = false;
   for (const p of pending.docs) {
-    if (!isMatch(p.data(), txData)) continue;
+    if (!isMatch(p.data(), txData)) {
+      if (isMatch(p.data(), txData, { ignoreProvider: true })) { await rejectProviderMismatch(p.id, docId); providerMismatchRejected = true; break; }
+      continue;
+    }
     const r = await confirmPaymentWithTx(p.id, docId);
     if (r.ok) { results.push(p.id); orders.push(String(p.data().orderNumber || '')); break; }
     if (r.duplicate) { rejectedDuplicate = true; break; }
   }
-  return { parseOk: true, parsed, provider: provider.name, confirmed: results, orders, rejectedDuplicate };
+  return { parseOk: true, parsed, provider: provider.name, confirmed: results, orders, rejectedDuplicate, providerMismatchRejected };
 }
 
 const STATUS_LABELS = { done: 'تمت', not_done: 'لم تتم', pending: 'قيد التنفيذ', not_found: 'غير موجودة' };
@@ -436,4 +471,4 @@ async function telegramReply(chatId, text) {
   } catch (e) { console.error('telegram reply failed', e); }
 }
 
-module.exports = { isMatch, parsePaymentMessage, phoneKey, normalizeDigits, tryConfirmPayment, confirmPaymentWithTx, ingestPaymentMessage, telegramReply, ORDER_TTL_MINUTES, loadProviders, matchProvider, txKeyId, checkTransactionStatus, DEFAULT_PROVIDERS, normProv };
+module.exports = { providerMismatch, rejectProviderMismatch, isMatch, parsePaymentMessage, phoneKey, normalizeDigits, tryConfirmPayment, confirmPaymentWithTx, ingestPaymentMessage, telegramReply, ORDER_TTL_MINUTES, loadProviders, matchProvider, txKeyId, checkTransactionStatus, DEFAULT_PROVIDERS, normProv };

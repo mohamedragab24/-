@@ -17,7 +17,7 @@ export function fnErrorMessage(e: any): string {
   const code = String(e?.code || "");
   const msg = String(e?.message || "");
   if (code.endsWith("/internal") && (msg === "internal" || msg === "INTERNAL")) {
-    return "تعذر الاتصال بالخادم. تأكد من نشر دوال Firebase ثم حاول مرة أخرى.";
+    return "تعذر الاتصال بالخادم. راجع نافذة الخطأ الحمراء لمعرفة السبب والحل.";
   }
   return msg || "حدث خطأ غير متوقع";
 }

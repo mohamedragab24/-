@@ -334,6 +334,8 @@ exports.purchaseCourse = onCall(async (request) => {
         ...common, status: 'pending_verification', paymentMethod,
         paymentMethodName: String(dynamicMethod?.name || paymentMethod),
         paymentAccounts: accounts, paymentPhoneKey: phoneKey(phone),
+        providerKey: String(dynamicMethod?.providerKey || ''), providerName: String(dynamicMethod?.providerName || ''),
+        serviceName: String(dynamicMethod?.name || ''), paymentGroup: String(dynamicMethod?.group || ''),
       });
       // لو كانت العملية وصلت للبوت بالفعل نؤكد فورًا
       let status = 'pending_verification';
@@ -745,7 +747,7 @@ exports.getJaasMeetingToken = onCall(async (request) => {
   const appId = process.env.JAAS_APP_ID || 'vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034';
   const keyId = process.env.JAAS_KEY_ID || '09cb60';
   const privateKey = process.env.JAAS_PRIVATE_KEY;
-  if (!appId || !keyId || !privateKey) throw new HttpsError('failed-precondition', 'إعدادات JaaS JWT غير مكتملة على الخادم');
+  if (!appId || !keyId || !privateKey) throw new HttpsError('failed-precondition', 'إعدادات الاجتماع غير مكتملة على الخادم', { cause: 'ناقص في Vercel: ' + [!appId && 'JAAS_APP_ID', !keyId && 'JAAS_KEY_ID', !privateKey && 'JAAS_PRIVATE_KEY'].filter(Boolean).join(', ') + '.', fix: 'أضف المتغيرات الناقصة من JaaS Console ← API Keys (المفتاح الخاص .pk كاملًا) ثم Redeploy.' });
   const suppliedRoom = String(request.data?.room || '').trim();
   const room = suppliedRoom || (requestId ? `Fahimni_${requestId}` : '');
   if (!room || room.includes('/')) throw new HttpsError('invalid-argument', 'اسم الغرفة غير صحيح');
@@ -876,3 +878,4 @@ exports.backfillCourseManifests = onCall({ secrets: R2_SECRETS, timeoutSeconds: 
 Object.assign(exports, require('./groups'));
 Object.assign(exports, require('./payments-admin'));
 Object.assign(exports, require('./recordings'));
+Object.assign(exports, require('./system-check'));

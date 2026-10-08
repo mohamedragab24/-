@@ -29,6 +29,7 @@ import { initializeFirebase, useFirestore, useUser, useMemoFirebase, useDoc, use
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
 import { R2MediaImage } from "@/components/r2-media-image";
+import { PaymentMethodPicker, GatewayLogo } from "@/components/payment/payment-method-picker";
 
 interface CoursePurchaseDialogProps {
   open: boolean;
@@ -261,19 +262,14 @@ export function CoursePurchaseDialog({
             <div className="space-y-3 text-right">
               <h5 className="font-black text-sm text-zinc-800">طريقة الدفع:</h5>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-3">
                 <div onClick={() => setPaymentMethod("balance" as any)} className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${paymentMethod === "balance" ? "border-primary bg-primary/5 shadow-sm" : "border-zinc-200 hover:border-zinc-300"}`}>
                   <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">محفظة فهمت</span><Wallet className="w-5 h-5 text-primary" /></div>
                   <p className="text-xs text-zinc-500 font-bold">الرصيد المتاح: {walletBalance} ج.م</p>
                 </div>
-                {paymentMethods.map((method:any) => (
-                  <div key={method.id} onClick={() => setPaymentMethod(method.id as any)} className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${paymentMethod === method.id ? "border-primary bg-primary/5 shadow-sm" : "border-zinc-200 hover:border-zinc-300"}`}>
-                    <div className="flex items-center justify-between mb-1"><span className="font-black text-sm text-zinc-900">{method.name}</span><CreditCard className="w-5 h-5 text-zinc-400" /></div>
-                    <p className="text-xs text-zinc-500 font-bold">{accountsOf(method).length > 1 ? `${accountsOf(method).length} خيارات للتحويل` : (accountsOf(method)[0]?.label || "وسيلة دفع إلكترونية")}</p>
-                  </div>
-                ))}
+                <PaymentMethodPicker methods={paymentMethods} value={paymentMethod} onChange={(id) => setPaymentMethod(id)} />
                 {paymentMethods.length === 0 && (
-                  <p className="col-span-full text-xs font-bold text-amber-700 bg-amber-50 p-3 rounded-xl">لا توجد وسائل دفع إلكترونية مفعّلة حاليًا. يمكنك الدفع من محفظة فهمت.</p>
+                  <p className="text-xs font-bold text-amber-700 bg-amber-50 p-3 rounded-xl">لا توجد وسائل دفع إلكترونية مفعّلة حاليًا. يمكنك الدفع من محفظة فهمت.</p>
                 )}
               </div>
               {paymentMethod !== "balance" && (
@@ -284,6 +280,7 @@ export function CoursePurchaseDialog({
                     if (!accs.length) return null;
                     return (
                       <div className="space-y-2">
+                        <div className="flex items-center justify-center gap-2"><GatewayLogo m={selected} size={32} /><span className="font-black text-sm">{selected?.name}</span></div>
                         <p className="text-xs text-zinc-600 font-bold text-center">حوّل مبلغ <span className="text-primary">{course.price} ج.م</span> إلى أحد الأرقام التالية:</p>
                         {accs.map((a, i) => (
                           <div key={i} className="p-3 rounded-xl bg-white border flex items-center justify-between gap-3">

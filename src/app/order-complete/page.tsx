@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
+import { GatewayLogo } from "@/components/payment/payment-method-picker";
 import { useFirebase, useFirestore } from "@/firebase";
 import { Button } from "@/components/ui/button";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
@@ -37,6 +38,16 @@ export default function OrderCompletePage() {
     }, (e) => { if (active) { setError(e?.message || "تعذر تحميل الإيصال."); setLoading(false); } });
     return () => { active = false; unsubscribe(); };
   }, [user, isUserLoading, firestore, paymentId, paramsRead]);
+
+  // شعار/اسم مزود الخدمة (المرفوع من إدارة المحافظ)
+  const [gw, setGw] = useState<any>(null);
+  const gwId = String(payment?.paymentMethod || "");
+  useEffect(() => {
+    if (!firestore || !gwId || gwId === "wallet" || gwId === "balance") { setGw(null); return; }
+    let alive = true;
+    getDoc(doc(firestore, "paymentMethods", gwId)).then((s) => { if (alive) setGw(s.exists() ? s.data() : null); }).catch(() => { if (alive) setGw(null); });
+    return () => { alive = false; };
+  }, [firestore, gwId]);
 
   const status = String(payment?.status || "");
   const pending = status === "pending_verification";
@@ -90,12 +101,13 @@ export default function OrderCompletePage() {
           <p className="text-xs text-amber-700">يجب أن يتم التحويل بعد وقت إنشاء الطلب ({fmtTime(payment.createdAt)}). سيتم التأكيد تلقائيًا بمجرد وصول العملية، لا تُغلق هذه الصفحة.</p>
         </div>
       ) : rejected ? (
-        <div className="rounded-2xl bg-red-50 border border-red-200 p-4 space-y-2"><h1 className="text-xl font-black text-red-800">تم رفض العملية</h1><p className="text-sm text-red-700">{payment.rejectReason === "duplicate_transaction" ? "رقم هذه العملية مستخدم من قبل لنفس طريقة الدفع، ولا يمكن استخدامه مرة أخرى." : "تم رفض هذه العملية."} إن كنت قد حوّلت المبلغ فعلًا تواصل مع الدعم برقم الطلب.</p></div>
+        <div className="rounded-2xl bg-red-50 border border-red-200 p-4 space-y-2"><h1 className="text-xl font-black text-red-800">تم رفض العملية</h1><p className="text-sm text-red-700">{payment.rejectReason === "duplicate_transaction" ? "رقم هذه العملية مستخدم من قبل لنفس طريقة الدفع، ولا يمكن استخدامه مرة أخرى." : payment.rejectReason === "provider_mismatch" ? "اسم مزود الخدمة في العملية لا يطابق طريقة الدفع التي اخترتها." : "تم رفض هذه العملية."} إن كنت قد حوّلت المبلغ فعلًا تواصل مع الدعم برقم الطلب.</p></div>
       ) : status === "expired" ? (
         <div className="rounded-2xl bg-red-50 border border-red-200 p-4 space-y-2"><h1 className="text-xl font-black text-red-800">انتهت مهلة الطلب</h1><p className="text-sm text-red-700">لم تصلنا عملية مطابقة خلال المدة المحددة. إن كنت قد حوّلت المبلغ فعلًا تواصل مع الدعم برقم الطلب.</p></div>
       ) : (
         <div className="rounded-2xl bg-slate-50 p-4 space-y-3"><h1 className="text-xl font-black">{status === "completed" ? "تم إتمام الطلب" : "تم تسجيل الطلب"}</h1><p className="text-sm text-slate-600">{status === "completed" ? (isTopup ? "تمت إضافة المبلغ إلى محفظتك." : "تم تسجيل الشراء وتفعيل الكورس ويمكنك مشاهدته الآن.") : "تم تسجيل بيانات الطلب."}</p></div>
       )}
+      {gw && <div className="flex items-center gap-3 rounded-2xl border bg-slate-50 p-3"><GatewayLogo m={gw} size={48} /><div><p className="font-black">{gw.name}</p><p className="text-xs text-slate-500 font-bold">{gw.providerName}</p></div></div>}
       <dl className="space-y-3 text-sm">{rows.map(([k, v]) => <div key={k} className="flex justify-between gap-4 border-b pb-2"><dt className="text-slate-500">{k}</dt><dd className="font-bold text-left break-all">{v || "—"}</dd></div>)}</dl>
       {status === "completed" && isTopup && <div className="grid gap-2"><Button asChild className="w-full"><Link href="/wallet">العودة للمحفظة</Link></Button></div>}
       {status === "completed" && !isTopup && <div className="grid gap-2"><Button asChild className="w-full"><a href={`fahmny://course/${encodeURIComponent(String(payment.courseId || ""))}`}>فتح الكورس في تطبيق فهمني</a></Button><Button asChild variant="outline" className="w-full"><Link href={`/courses/${payment.courseId}`}>المشاهدة عبر الموقع</Link></Button><Button asChild variant="outline" className="w-full"><Link href="/courses?tab=enrolled">كورساتي</Link></Button></div>}

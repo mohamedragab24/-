@@ -7,7 +7,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CreditCard, Loader2, ShieldCheck } from "lucide-react";
+import { Loader2, ShieldCheck } from "lucide-react";
+import { PaymentMethodPicker, GatewayLogo } from "@/components/payment/payment-method-picker";
 import { initializeFirebase } from "@/firebase";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { useToast } from "@/hooks/use-toast";
@@ -40,7 +41,7 @@ export function WalletTopupDialog({ open, onOpenChange }: { open: boolean; onOpe
         const { firebaseApp } = initializeFirebase();
         const snap = await getDocs(query(collection(getFirestore(firebaseApp), "paymentMethods"), where("active", "==", true)));
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
-        if (alive) { setMethods(list); if (list.length && !methodId) setMethodId(String((list[0] as any).id)); }
+        if (alive) { setMethods(list);  }
       } catch (e) { console.error("payment methods", e); }
     })();
     return () => { alive = false; };
@@ -74,16 +75,11 @@ export function WalletTopupDialog({ open, onOpenChange }: { open: boolean; onOpe
           <div className="space-y-2"><Label className="font-black">المبلغ (ج.م) — 10 كحد أدنى</Label><Input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-14 text-2xl font-black text-center rounded-2xl border-2" /></div>
           <div className="space-y-2"><Label className="font-black">طريقة الدفع</Label>
             {methods.length === 0 ? <p className="text-xs font-bold text-amber-700 bg-amber-50 p-3 rounded-xl">لا توجد وسائل دفع مفعّلة حاليًا.</p> : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {methods.map((m) => (
-                  <div key={m.id} onClick={() => setMethodId(m.id)} className={`p-4 rounded-2xl border-2 cursor-pointer ${methodId === m.id ? "border-primary bg-primary/5" : "border-zinc-200"}`}>
-                    <div className="flex items-center justify-between"><span className="font-black text-sm">{m.name}</span><CreditCard className="w-5 h-5 text-zinc-400" /></div>
-                  </div>
-                ))}
-              </div>)}
+              <PaymentMethodPicker methods={methods} value={methodId} onChange={setMethodId} />)}
           </div>
           {accs.length > 0 && (
             <div className="space-y-2 p-4 rounded-2xl bg-amber-50 border border-amber-100">
+              <div className="flex items-center justify-center gap-2"><GatewayLogo m={selected} size={32} /><span className="font-black text-sm">{selected?.name}</span></div>
               <p className="text-xs font-bold text-zinc-600 text-center">حوّل <span className="text-primary">{amount || "…"} ج.م</span> إلى أحد الأرقام:</p>
               {accs.map((a, i) => (<div key={i} className="p-3 rounded-xl bg-white border flex items-center justify-between gap-3"><span className="text-sm font-black">{a.label || selected?.name}</span><div className="flex items-center gap-2"><span className="text-lg font-black tracking-widest text-primary" dir="ltr">{a.number}</span><Button type="button" size="sm" variant="outline" className="h-8 rounded-lg text-xs font-bold" onClick={() => { try { navigator.clipboard?.writeText(a.number); toast({ title: "تم نسخ الرقم" }); } catch (_) {} }}>نسخ</Button></div></div>))}
             </div>)}

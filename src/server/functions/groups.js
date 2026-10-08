@@ -444,7 +444,7 @@ exports.getGroupMeetingToken = onCall(async (request) => {
   const appId = process.env.JAAS_APP_ID || 'vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034';
   const keyId = process.env.JAAS_KEY_ID || '09cb60';
   const privateKey = process.env.JAAS_PRIVATE_KEY;
-  if (!privateKey) throw new HttpsError('failed-precondition', 'إعدادات JaaS JWT غير مكتملة على الخادم');
+  if (!privateKey) throw new HttpsError('failed-precondition', 'إعدادات الاجتماع غير مكتملة على الخادم', { cause: 'المتغير JAAS_PRIVATE_KEY غير موجود في Vercel (أو لم تعمل Redeploy بعد إضافته).', fix: 'JaaS Console ← API Keys ← أنشئ مفتاحًا، ألصق محتوى ملف .pk كاملًا في JAAS_PRIVATE_KEY (ومعه JAAS_KEY_ID)، ثم Redeploy.' });
   const room = String(ss.data().room);
   const me = (await db.collection('users').doc(uid).get()).data() || {};
   const now = Math.floor(Date.now() / 1000);

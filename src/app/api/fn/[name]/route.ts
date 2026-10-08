@@ -19,8 +19,18 @@ const STATUS: Record<string, number> = {
   "deadline-exceeded": 504,
 };
 
-function fail(code: string, message: string) {
-  return NextResponse.json({ error: { code, message } }, { status: STATUS[code] || 500 });
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { diagnose } = require("../../../../server/diagnostics.js");
+
+/** يرجّع خطأ منظّمًا: code + message + cause (السبب) + fix (المطلوب) + technical (للنسخ) */
+function fail(code: string, message: string, extra: { cause?: string; fix?: string; technical?: string; link?: string; fn?: string } = {}, status?: number) {
+  return NextResponse.json({ error: { code, message, ...extra } }, { status: status ?? (STATUS[code] || 500) });
+}
+
+function failFrom(e: any, ctx: { stage?: string; fn?: string }) {
+  const d = diagnose(e, ctx);
+  const known = STATUS[d.code] !== undefined;
+  return fail(d.code, d.message, { cause: d.cause, fix: d.fix, technical: d.technical, link: d.link, fn: ctx.fn }, known ? STATUS[d.code] : 500);
 }
 
 /**
@@ -37,11 +47,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
     admin = require("firebase-admin");
   } catch (e: any) {
     console.error("functions init failed", e);
-    return fail("internal", "إعداد الخادم ناقص: تأكد من متغير FIREBASE_SERVICE_ACCOUNT في Vercel");
+    return failFrom(e, { stage: "init", fn: name });
   }
 
   const entry = fns[name];
-  if (!entry || !entry.__callable) return fail("not-found", "الدالة غير موجودة");
+  if (!entry || !entry.__callable) {
+    return fail("not-found", `الدالة غير موجودة على السيرفر: ${name}`, {
+      cause: "التطبيق يستدعي دالة لم تُنشر في نسخة المنصة الحالية على Vercel.",
+      fix: "ارفع آخر نسخة من fahmni-platform إلى Vercel (git push) وانتظر انتهاء النشر، ثم أعد المحاولة. وتأكد أن اسم الدالة مكتوب بنفس الشكل في التطبيق.",
+      fn: name,
+    });
+  }
 
   let auth: any = undefined;
   const header = req.headers.get("authorization") || "";
@@ -49,8 +65,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
     try {
       const decoded = await admin.auth().verifyIdToken(header.slice(7));
       auth = { uid: decoded.uid, token: decoded };
-    } catch {
-      return fail("unauthenticated", "انتهت الجلسة، سجّل الدخول من جديد");
+    } catch (e: any) {
+      const d = diagnose(e, { stage: "user", fn: name });
+      // أخطاء الاتصال بـ Google أثناء التحقق ليست خطأ المستخدم
+      if (d.code.startsWith("config/") || d.code.startsWith("firebase/")) return failFrom(e, { fn: name });
+      return fail("unauthenticated", "انتهت الجلسة، سجّل الدخول من جديد", {
+        cause: "توكن الدخول منتهي أو غير صالح لهذا المشروع.",
+        fix: "سجّل الخروج ثم سجّل الدخول من جديد. لو تكرر تأكد أن التطبيق والمنصة على نفس مشروع Firebase.",
+        technical: d.technical, fn: name,
+      });
     }
   }
 
@@ -66,10 +89,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
     const result = await entry.handler({ auth, data, rawRequest: req });
     return NextResponse.json({ data: result ?? null });
   } catch (e: any) {
-    if (e && typeof e.code === "string" && STATUS[e.code] !== undefined) {
-      return fail(e.code, String(e.message || ""));
-    }
     console.error(`fn ${name} failed`, e);
-    return fail("internal", String(e?.message || "internal").slice(0, 300));
+    return failFrom(e, { fn: name });
   }
 }

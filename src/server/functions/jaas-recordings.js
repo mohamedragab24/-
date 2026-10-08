@@ -6,7 +6,8 @@
  * أسماء الغرف: Fahimni_group_<groupId>_<sessionId> (مجموعات) و Fahimni_<requestId> (محاضرات الاستفهام).
  */
 const admin = require('firebase-admin');
-const { presignedUrl, putObject } = require('./r2');
+const { presignedUrl, putObject, getConfig } = require('./r2');
+const { diagnose } = require('../diagnostics');
 
 const db = () => admin.firestore();
 const FV = () => admin.firestore.FieldValue;
@@ -90,10 +91,21 @@ async function handleJaasEvent(body) {
 
   // RECORDING_UPLOADED
   const link = data.preAuthenticatedLink || data.downloadLink || data.share || '';
-  if (!link) { await ref.set({ ...common, status: 'failed', error: 'no_download_link', createdAt: FV().serverTimestamp() }, { merge: true }); return { ok: false, error: 'no_download_link' }; }
+  if (!link) {
+    const err = { error: 'no_download_link', errorTitle: 'JaaS لم يرسل رابط التسجيل', errorCause: 'حدث RECORDING_UPLOADED وصل بدون رابط تنزيل (اسم الحقل مختلف عن المتوقع).', errorFix: 'افتح Vercel ← Logs لمسار /api/jaas/webhook وانظر محتوى الحدث (data) وأرسله للمطوّر لإضافة اسم الحقل الصحيح.' };
+    console.error('jaas webhook: no download link. data keys =', Object.keys(data || {}));
+    await ref.set({ ...common, status: 'failed', ...err, createdAt: FV().serverTimestamp() }, { merge: true });
+    return { ok: false, ...err, dataKeys: Object.keys(data || {}) };
+  }
   const stamp = String(data.recordingSessionId || body.sessionId || Date.now()).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
   const key = info.kind === 'group' ? `groups/${info.groupId}/recordings/${info.sessionId}_${stamp}.mp4` : `meetings/${info.requestId}/${stamp}.mp4`;
-  await ref.set({ ...common, status: 'uploading', createdAt: FV().serverTimestamp(), order: Date.now() }, { merge: true });
+  // نتحقق من إعدادات R2 قبل أي تنزيل، حتى يظهر السبب فورًا بدل «جارٍ الرفع» للأبد
+  try { getConfig(); } catch (e) {
+    const d = diagnose(e);
+    await ref.set({ ...common, status: 'failed', error: d.technical, errorTitle: d.message, errorCause: d.cause, errorFix: d.fix, sourceLink: link, failedAtMs: Date.now() }, { merge: true });
+    return { ok: false, error: d.code, message: d.message, cause: d.cause, fix: d.fix };
+  }
+  await ref.set({ ...common, status: 'uploading', uploadStartedAtMs: Date.now(), error: FV().delete(), errorTitle: FV().delete(), errorCause: FV().delete(), errorFix: FV().delete(), createdAt: FV().serverTimestamp(), order: Date.now() }, { merge: true });
   try {
     const size = await upload(link, key);
     const dur = durationSec(data);
@@ -106,8 +118,9 @@ async function handleJaasEvent(body) {
     return { ok: true, status: 'ready', key, size };
   } catch (e) {
     console.error('recording upload failed', e);
-    await ref.set({ status: 'failed', error: String(e?.message || e).slice(0, 200), sourceLink: link }, { merge: true });
-    return { ok: false, error: String(e?.message || e).slice(0, 200) };
+    const d = diagnose(e);
+    await ref.set({ status: 'failed', error: d.technical.slice(0, 400), errorTitle: d.message, errorCause: d.cause, errorFix: d.fix, sourceLink: link, failedAtMs: Date.now() }, { merge: true });
+    return { ok: false, error: d.code, message: d.message, cause: d.cause, fix: d.fix };
   }
 }
 

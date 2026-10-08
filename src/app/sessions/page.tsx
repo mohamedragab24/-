@@ -77,8 +77,8 @@ export default function SessionsPage() {
                   
                   <div className="flex flex-col gap-3 shrink-0">
                     {session.status === 'paid' ? (
-                      <Button onClick={() => router.push(`/meeting/${session.id}`)} className="h-16 px-10 rounded-2xl bg-primary hover:bg-primary/90 text-white font-black text-lg shadow-xl shadow-primary/20">
-                        <PlayCircle className="ml-2" /> دخول المحاضرة الآن
+                      <Button asChild className="h-16 px-10 rounded-2xl bg-primary hover:bg-primary/90 text-white font-black text-lg shadow-xl shadow-primary/20">
+                        <a href={`fahmny://meeting/${session.id}`}><PlayCircle className="ml-2" /> دخول المحاضرة في التطبيق</a>
                       </Button>
                     ) : (
                       <Button variant="outline" onClick={() => router.push(`/requests/${session.id}`)} className="h-14 px-8 rounded-2xl font-black text-zinc-600 border-zinc-200">
