@@ -309,6 +309,8 @@ exports.purchaseCourse = onCall(async (request) => {
       const old = existing.data() || {};
       return { ok: true, alreadyPurchased: true, paymentId: String(old.paymentId || ''), orderNumber: String(old.orderNumber || ''), amountPaid: Number(old.amountPaid || amount) };
     }
+    // إيقاف الشراء: المفهم أو الأدمن أوقف استقبال طلبات شراء جديدة (الطلبات المعلّقة قبل الإيقاف تكتمل عادي)
+    if (course.purchaseEnabled === false) throw new HttpsError('failed-precondition', 'شراء هذا الكورس متوقف حاليًا');
 
     const paymentRef = db.collection('payments').doc();
     const now = admin.firestore.FieldValue.serverTimestamp();
@@ -872,3 +874,5 @@ exports.backfillCourseManifests = onCall({ secrets: R2_SECRETS, timeoutSeconds: 
 
 // المجموعات
 Object.assign(exports, require('./groups'));
+Object.assign(exports, require('./payments-admin'));
+Object.assign(exports, require('./recordings'));

@@ -284,7 +284,7 @@ export default function CourseDetailPage() {
                     <h5 className="font-black text-amber-900 text-sm">معاينة مجانية لمدة دقيقتين</h5>
                     <p className="text-xs text-amber-700 font-bold">المشاهدة الكاملة لجميع الحلقات متاحة داخل تطبيق Fahimt بعد تسجيل الدخول بالحساب المشتري.</p>
                   </div>
-                  <Button onClick={() => setPurchaseOpen(true)} className="bg-primary text-white font-black text-xs h-10 px-5 rounded-xl shrink-0">شراء الكورس ({course.price} ج.م)</Button>
+                  <Button onClick={() => setPurchaseOpen(true)} disabled={course.purchaseEnabled === false} className="bg-primary text-white font-black text-xs h-10 px-5 rounded-xl shrink-0">{course.purchaseEnabled === false ? "شراء هذا الكورس متوقف حاليًا" : `شراء الكورس (${course.price} ج.م)`}</Button>
                 </div>}
               </div>
             ) : (
@@ -295,7 +295,7 @@ export default function CourseDetailPage() {
                   <h3 className="text-2xl font-black">{activeLesson?.title || "محتوى الكورس"}</h3>
                   <p className="text-zinc-400 text-xs md:text-sm font-bold leading-relaxed">لا يتم تشغيل الحلقات الكاملة على المنصة. إذا كان حسابك مشتريًا للكورس، افتح الكورس من تطبيق Fahimt لمتابعة المشاهدة الكاملة.</p>
                 </div>
-                {!isEnrolled && <Button onClick={() => setPurchaseOpen(true)} className="bg-primary hover:bg-primary/90 text-white font-black rounded-2xl h-14 px-8 text-base shadow-xl gap-2"><Lock className="w-5 h-5" /><span>شراء الكورس ({course.price} ج.م)</span></Button>}
+                {!isEnrolled && <Button onClick={() => setPurchaseOpen(true)} disabled={course.purchaseEnabled === false} className="bg-primary hover:bg-primary/90 text-white font-black rounded-2xl h-14 px-8 text-base shadow-xl gap-2"><Lock className="w-5 h-5" /><span>{course.purchaseEnabled === false ? "شراء هذا الكورس متوقف حاليًا" : `شراء الكورس (${course.price} ج.م)`}</span></Button>}
                 {isEnrolled && <a href={`fahmny://course/${course.id}`} className="inline-flex items-center justify-center bg-primary hover:bg-primary/90 text-white font-black rounded-2xl h-14 px-8 text-base shadow-xl">فتح الكورس في التطبيق</a>}
               </div>
             )}
@@ -441,10 +441,11 @@ export default function CourseDetailPage() {
 
                 <Button
                   onClick={() => setPurchaseOpen(true)}
+                  disabled={course.purchaseEnabled === false}
                   className="w-full bg-primary hover:bg-primary/90 text-white font-black rounded-xl h-14 text-base shadow-lg hover:scale-102 transition-all gap-2 cursor-pointer"
                 >
                   <Lock className="w-4 h-4" />
-                  شراء الكورس والبدء فوراً
+                  {course.purchaseEnabled === false ? "شراء هذا الكورس متوقف حاليًا" : "شراء الكورس والبدء فوراً"}
                 </Button>
               </Card>
             )}

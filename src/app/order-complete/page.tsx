@@ -55,7 +55,7 @@ export default function OrderCompletePage() {
 
   // عند التأكيد: حدّث قائمة "كورساتي" فورًا
   useEffect(() => {
-    if (status === "completed" && user?.uid && firestore && !synced.current) {
+    if (status === "completed" && payment?.type !== "wallet_topup" && user?.uid && firestore && !synced.current) {
       synced.current = true;
       void syncPurchasedCourses(firestore, user.uid);
     }
@@ -64,16 +64,18 @@ export default function OrderCompletePage() {
   const methodLabel = payment?.paymentMethod === "wallet" ? "محفظة فهمت" : (payment?.paymentMethodName || METHOD_NAMES[payment?.paymentMethod] || payment?.paymentMethod);
   const accounts: { label: string; number: string }[] = Array.isArray(payment?.paymentAccounts) ? payment.paymentAccounts : [];
 
+  const isTopup = payment?.type === "wallet_topup";
+  const rejected = status === "rejected";
   const rows: [string, any][] = [
     ["رقم الطلب", payment?.orderNumber || payment?.id],
     ["رقم العملية (من البوت)", payment?.providerTxId],
-    ["الكورس", payment?.courseName],
+    [isTopup ? "نوع العملية" : "الكورس", isTopup ? "شحن المحفظة" : payment?.courseName],
     ["المبلغ", `${Number(payment?.amount || 0).toFixed(2)} جنيه مصري`],
     ["طريقة الدفع", methodLabel],
     ["الدفع من رقم", payment?.paymentPhone || payment?.phone],
     ["وقت العملية", fmtTime(payment?.providerTxTime)],
     ["البريد الإلكتروني", payment?.email],
-    ["حالة العملية", status === "completed" ? "مكتملة" : pending ? "بانتظار التأكيد" : status === "expired" ? "منتهية" : "مسجلة"],
+    ["حالة العملية", status === "completed" ? "مكتملة" : pending ? "بانتظار التأكيد" : status === "expired" ? "منتهية" : rejected ? "مرفوضة" : "مسجلة"],
   ];
 
   return <main dir="rtl" className="min-h-screen bg-slate-50 p-4 flex items-center justify-center"><section className="w-full max-w-xl rounded-3xl bg-white p-6 md:p-9 shadow-lg border space-y-5">
@@ -87,13 +89,16 @@ export default function OrderCompletePage() {
           {accounts.map((a, i) => (<div key={i} className="rounded-xl bg-white border p-2 text-sm font-black">{a.label ? `${a.label}: ` : ""}<span className="font-mono text-primary" dir="ltr">{a.number}</span></div>))}
           <p className="text-xs text-amber-700">يجب أن يتم التحويل بعد وقت إنشاء الطلب ({fmtTime(payment.createdAt)}). سيتم التأكيد تلقائيًا بمجرد وصول العملية، لا تُغلق هذه الصفحة.</p>
         </div>
+      ) : rejected ? (
+        <div className="rounded-2xl bg-red-50 border border-red-200 p-4 space-y-2"><h1 className="text-xl font-black text-red-800">تم رفض العملية</h1><p className="text-sm text-red-700">{payment.rejectReason === "duplicate_transaction" ? "رقم هذه العملية مستخدم من قبل لنفس طريقة الدفع، ولا يمكن استخدامه مرة أخرى." : "تم رفض هذه العملية."} إن كنت قد حوّلت المبلغ فعلًا تواصل مع الدعم برقم الطلب.</p></div>
       ) : status === "expired" ? (
         <div className="rounded-2xl bg-red-50 border border-red-200 p-4 space-y-2"><h1 className="text-xl font-black text-red-800">انتهت مهلة الطلب</h1><p className="text-sm text-red-700">لم تصلنا عملية مطابقة خلال المدة المحددة. إن كنت قد حوّلت المبلغ فعلًا تواصل مع الدعم برقم الطلب.</p></div>
       ) : (
-        <div className="rounded-2xl bg-slate-50 p-4 space-y-3"><h1 className="text-xl font-black">{status === "completed" ? "تم إتمام الطلب" : "تم تسجيل الطلب"}</h1><p className="text-sm text-slate-600">{status === "completed" ? "تم تسجيل الشراء وتفعيل الكورس ويمكنك مشاهدته الآن." : "تم تسجيل بيانات الطلب."}</p></div>
+        <div className="rounded-2xl bg-slate-50 p-4 space-y-3"><h1 className="text-xl font-black">{status === "completed" ? "تم إتمام الطلب" : "تم تسجيل الطلب"}</h1><p className="text-sm text-slate-600">{status === "completed" ? (isTopup ? "تمت إضافة المبلغ إلى محفظتك." : "تم تسجيل الشراء وتفعيل الكورس ويمكنك مشاهدته الآن.") : "تم تسجيل بيانات الطلب."}</p></div>
       )}
       <dl className="space-y-3 text-sm">{rows.map(([k, v]) => <div key={k} className="flex justify-between gap-4 border-b pb-2"><dt className="text-slate-500">{k}</dt><dd className="font-bold text-left break-all">{v || "—"}</dd></div>)}</dl>
-      {status === "completed" && <div className="grid gap-2"><Button asChild className="w-full"><a href={`fahmny://course/${encodeURIComponent(String(payment.courseId || ""))}`}>فتح الكورس في تطبيق فهمني</a></Button><Button asChild variant="outline" className="w-full"><Link href={`/courses/${payment.courseId}`}>المشاهدة عبر الموقع</Link></Button><Button asChild variant="outline" className="w-full"><Link href="/courses?tab=enrolled">كورساتي</Link></Button></div>}
+      {status === "completed" && isTopup && <div className="grid gap-2"><Button asChild className="w-full"><Link href="/wallet">العودة للمحفظة</Link></Button></div>}
+      {status === "completed" && !isTopup && <div className="grid gap-2"><Button asChild className="w-full"><a href={`fahmny://course/${encodeURIComponent(String(payment.courseId || ""))}`}>فتح الكورس في تطبيق فهمني</a></Button><Button asChild variant="outline" className="w-full"><Link href={`/courses/${payment.courseId}`}>المشاهدة عبر الموقع</Link></Button><Button asChild variant="outline" className="w-full"><Link href="/courses?tab=enrolled">كورساتي</Link></Button></div>}
     </> : null}
     <Button asChild variant="outline" className="w-full"><Link href="/courses">العودة للكورسات</Link></Button>
   </section></main>;

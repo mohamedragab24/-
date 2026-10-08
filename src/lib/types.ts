@@ -62,6 +62,8 @@ export interface Course {
   instructorName: string;
   instructorAvatar?: string;
   isPublished: boolean;
+  /** false = المفهم/الإدارة أوقفوا استقبال طلبات شراء جديدة لهذا الكورس (الافتراضي: مسموح) */
+  purchaseEnabled?: boolean;
   category: string;
   createdAt: string;
   updatedAt?: string;

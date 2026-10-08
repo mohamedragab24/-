@@ -404,9 +404,10 @@ export default function CoursesPage() {
                                 setCourseToPurchase(course);
                                 setPurchaseOpen(true);
                               }}
+                              disabled={course.purchaseEnabled === false}
                               className="rounded-xl font-black h-12 text-xs bg-primary hover:bg-primary/90 text-white shadow-md cursor-pointer"
                             >
-                              شراء الكورس الآن
+                              {course.purchaseEnabled === false ? "شراء هذا الكورس متوقف حاليًا" : "شراء الكورس الآن"}
                             </Button>
                           </div>
                         )}

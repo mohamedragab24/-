@@ -94,6 +94,7 @@ export function CourseEditorDialog({
   const [price, setPrice] = useState<number>(courseToEdit?.price || 100);
   const [category, setCategory] = useState(courseToEdit?.category || "البرمجة والتقنية");
   const [isPublished, setIsPublished] = useState<boolean>(courseToEdit ? courseToEdit.isPublished : false);
+  const [purchaseEnabled, setPurchaseEnabled] = useState<boolean>(courseToEdit ? courseToEdit.purchaseEnabled !== false : true);
   
   // Lessons list
   const [lessons, setLessons] = useState<CourseLesson[]>(courseToEdit?.lessons || []);
@@ -129,6 +130,7 @@ export function CourseEditorDialog({
       setPrice(courseToEdit.price);
       setCategory(courseToEdit.category || "البرمجة والتقنية");
       setIsPublished(courseToEdit.isPublished);
+      setPurchaseEnabled(courseToEdit.purchaseEnabled !== false);
       setLessons((courseToEdit.lessons || []).map((lesson, index) => ({ ...lesson, order: index + 1, title: withLessonNumber(lesson.title, index + 1) })));
     } else {
       setTitle("");
@@ -344,6 +346,7 @@ export function CourseEditorDialog({
       instructorAvatar: courseToEdit?.instructorAvatar || instructorAvatar || "",
       isPublished: courseToEdit ? (canManagePublication ? isPublished : courseToEdit.isPublished) : false,
       status: courseToEdit ? ((canManagePublication ? isPublished : courseToEdit.isPublished) ? "published" : "pending") : "pending",
+      purchaseEnabled,
       category,
       createdAt: courseToEdit?.createdAt || new Date().toISOString(),
       totalEnrollments: courseToEdit?.totalEnrollments || 0,
@@ -413,6 +416,17 @@ export function CourseEditorDialog({
               ) : (
                 <Badge className="bg-emerald-100 text-emerald-700 font-black">المُفهم لا يستطيع إخفاء الكورس</Badge>
               )}
+            </div>
+
+            {/* السماح بالشراء: إيقافه يمنع إنشاء أي طلب شراء جديد (المفهم أو الإدارة) */}
+            <div className="flex items-center justify-between p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl border">
+              <div className="space-y-0.5 text-right">
+                <Label className="text-base font-black">السماح بالشراء: {purchaseEnabled ? "تشغيل" : "إيقاف"}</Label>
+                <p className="text-xs text-zinc-500 font-bold">
+                  {purchaseEnabled ? "يستطيع الطلاب شراء الكورس." : "تم إيقاف استقبال طلبات الشراء: يتعطل زر الشراء ولا يُنشأ أي طلب جديد."}
+                </p>
+              </div>
+              <Switch checked={purchaseEnabled} onCheckedChange={setPurchaseEnabled} />
             </div>
 
             {/* الأساسيات: الاسم والسعر والتصنيف */}

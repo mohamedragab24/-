@@ -151,6 +151,10 @@ async function purgeGroup(groupId) {
   }
   const invites = await db.collection('groupInvites').where('groupId', '==', groupId).get();
   for (const i of invites.docs) { try { await i.ref.delete(); } catch (_) {} }
+  try {
+    const lr = await db.collection('lectureRecordings').where('groupId', '==', groupId).get();
+    for (const l of lr.docs) { try { await l.ref.delete(); } catch (_) {} }
+  } catch (_) {}
   await db.recursiveDelete(ref);
 }
 
@@ -316,6 +320,7 @@ exports.deleteGroupContent = onCall({ secrets: R2_SECRETS }, async (request) => 
   const d = snap.data() || {};
   if (d.r2Key) { try { await deleteObject(String(d.r2Key)); } catch (e) { console.error('r2 delete', e); } }
   await docRef.delete();
+  if (kind === 'recordings') { try { await db.collection('lectureRecordings').doc(String(request.data?.id || '')).delete(); } catch (_) {} }
   await ref.update({ storageBytes: FV.increment(-Number(d.size || 0)), contentCount: FV.increment(-1) });
   return { ok: true };
 });
@@ -395,7 +400,15 @@ exports.endGroupSession = onCall(async (request) => {
   await sRef.update({ status: 'ended', endedAt: FV.serverTimestamp() });
   if (d.record) {
     // يُضاف تلقائيًا لقسم الجلسات المسجلة؛ يكتمل الملف عند وصول تسجيل JaaS (webhook).
-    await ref.collection('recordings').doc(sid).set({ title: d.title, sessionId: sid, status: 'processing', size: 0, createdAt: FV.serverTimestamp(), order: Date.now() }, { merge: true });
+    // لا نعيد حالة تسجيل اكتمل رفعه بالفعل (الـ webhook قد يسبق إنهاء الجلسة).
+    const rRef = ref.collection('recordings').doc(sid);
+    const lRef = db.collection('lectureRecordings').doc(sid);
+    const [rEx, lEx] = await Promise.all([rRef.get(), lRef.get()]);
+    if (!rEx.exists) await rRef.set({ title: d.title, sessionId: sid, status: 'processing', size: 0, createdAt: FV.serverTimestamp(), order: Date.now() });
+    const g = (await ref.get()).data() || {};
+    const meta = { kind: 'group', title: d.title, groupId: ref.id, groupName: g.name || '', ownerUid: g.ownerUid || '', ownerName: g.ownerName || '', sessionId: sid, room: d.room || '' };
+    if (!lEx.exists) await lRef.set({ ...meta, status: 'processing', size: 0, durationSec: 0, createdAt: FV.serverTimestamp(), order: Date.now() });
+    else await lRef.set(meta, { merge: true });
   }
   return { ok: true, recording: !!d.record };
 });

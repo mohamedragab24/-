@@ -208,6 +208,7 @@ function toCourse(id: string, d: any): Course {
     instructorId: String(d?.instructorId || d?.ownerUid || ""),
     instructorName: String(d?.instructorName || ""),
     isPublished: d?.isPublished ?? d?.status === "published",
+    purchaseEnabled: d?.purchaseEnabled !== false,
     category: String(d?.category || ""),
     createdAt: String(d?.createdAt?.toDate?.()?.toISOString?.() || d?.createdAt || new Date().toISOString()),
   } as Course;

@@ -189,7 +189,10 @@ export default function GroupDetailPage() {
           {liveSessions!.map((s: any) => (
             <div key={s.id} className="flex items-center justify-between gap-3">
               {owner ? <Button size="sm" variant="outline" className="rounded-xl font-black" disabled={busy === `end-${s.id}`} onClick={() => endSession(s.id)}>إنهاء الجلسة</Button> : <span />}
-              <p className="font-black text-emerald-800 flex items-center gap-2"><Radio className="animate-pulse" size={18} /> جلسة مباشرة الآن: {s.title} — تُفتح من التطبيق</p>
+              <div className="flex items-center gap-3 flex-wrap justify-end">
+                <a href={`fahmny://group/${id}/session/${s.id}`} className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm rounded-xl px-4 h-10"><Smartphone size={16} /> دخول الاجتماع في التطبيق</a>
+                <p className="font-black text-emerald-800 flex items-center gap-2"><Radio className="animate-pulse" size={18} /> جلسة مباشرة الآن: {s.title}</p>
+              </div>
             </div>
           ))}
         </div>

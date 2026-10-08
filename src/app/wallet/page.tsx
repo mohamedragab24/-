@@ -22,6 +22,7 @@ import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from "@
 import { collection, query, orderBy, doc, addDoc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { WalletTopupDialog } from "@/components/wallet/wallet-topup-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -34,6 +35,7 @@ function WalletContent() {
   const { toast } = useToast();
   const [amount, setAmount] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isTopupOpen, setIsTopupOpen] = useState(false);
   const [withdrawalMethod, setWithdrawalMethod] = useState<WithdrawalMethod>('e_wallet');
   const [transferTarget, setTarget] = useState("");
 
@@ -85,16 +87,8 @@ function WalletContent() {
         timestamp: new Date().toISOString()
       });
       toast({ title: "تم تقديم طلب السحب" });
-    } else {
-      await addDoc(collection(firestore, "users", user.uid, "transactions"), {
-        amount: numAmount,
-        type: 'deposit',
-        details: 'شحن رصيد المحفظة',
-        status: 'completed',
-        timestamp: new Date().toISOString()
-      });
-      toast({ title: "تم الشحن بنجاح" });
     }
+    // شحن المستفهم يتم فقط عبر بوابة الدفع (WalletTopupDialog) ولا يُضاف أي رصيد من المتصفح.
     setIsModalOpen(false);
     setAmount("");
     setTarget("");
@@ -113,14 +107,15 @@ function WalletContent() {
         <Card className="lg:col-span-2 bg-zinc-900 text-white border-none shadow-2xl rounded-[3rem] p-12 relative overflow-hidden">
           <div className="relative z-10 space-y-10">
             <div className="space-y-2"><span className="text-zinc-400 font-black text-xl">الرصيد المتاح</span><div className="flex items-baseline gap-4"><span className="text-8xl font-black tabular-nums tracking-tighter">{balance}</span><span className="text-3xl font-bold opacity-60">ج.م</span></div></div>
-            <Button onClick={()=>setIsModalOpen(true)} className="bg-primary text-white px-12 py-10 rounded-3xl font-black text-2xl shadow-xl transition-all">
+            <Button onClick={()=> profile.role === 'mustafhem' ? setIsTopupOpen(true) : setIsModalOpen(true)} className="bg-primary text-white px-12 py-10 rounded-3xl font-black text-2xl shadow-xl transition-all">
               {profile.role === 'mustafhem' ? <><Plus className="ml-3 h-8 w-8" /> إضافة رصيد</> : <><Download className="ml-3 h-8 w-8" /> سحب الأرباح</>}
             </Button>
           </div>
         </Card>
       </div>
 
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+      <WalletTopupDialog open={isTopupOpen} onOpenChange={setIsTopupOpen} />
+      <Dialog open={isModalOpen && profile.role !== 'mustafhem'} onOpenChange={setIsModalOpen}>
         <DialogContent dir="rtl" className="rounded-[3rem] sm:max-w-[550px]">
           <DialogHeader><DialogTitle className="text-right text-3xl font-black">{profile.role === 'mustafhem' ? 'شحن المحفظة' : 'سحب الأرباح'}</DialogTitle></DialogHeader>
           <div className="py-6 space-y-8 text-right">

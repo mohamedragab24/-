@@ -114,7 +114,13 @@ export function CoursePurchaseDialog({
   const isAlreadyBought = isUserEnrolled(course.id, studentId);
   const isOwner = course.instructorId === studentId;
 
+  const purchaseStopped = (course as any).purchaseEnabled === false;
+
   const handleConfirmPurchase = async () => {
+    if (purchaseStopped) {
+      toast({ variant: "destructive", title: "الشراء متوقف", description: "شراء هذا الكورس متوقف حاليًا." });
+      return;
+    }
     if (isAlreadyBought) {
       toast({
         variant: "destructive",
@@ -247,6 +253,10 @@ export function CoursePurchaseDialog({
               </div>
             </div>
 
+            {purchaseStopped && (
+              <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-right text-sm font-black text-red-700">شراء هذا الكورس متوقف حاليًا.</div>
+            )}
+
             {/* اختيار طريقة الدفع */}
             <div className="space-y-3 text-right">
               <h5 className="font-black text-sm text-zinc-800">طريقة الدفع:</h5>
@@ -323,7 +333,7 @@ export function CoursePurchaseDialog({
 
               <Button
                 onClick={handleConfirmPurchase}
-                disabled={isProcessing || (paymentMethod !== "balance" && paymentPhone.trim().replace(/[^\d+]/g, "").length < 8) || (paymentMethod === "balance" && walletBalance < Number(course.price || 0))}
+                disabled={isProcessing || purchaseStopped || (paymentMethod !== "balance" && paymentPhone.trim().replace(/[^\d+]/g, "").length < 8) || (paymentMethod === "balance" && walletBalance < Number(course.price || 0))}
                 className="bg-primary hover:bg-primary/90 text-white font-black rounded-xl px-8 h-12 text-base gap-2"
               >
                 {isProcessing ? "جارٍ تسجيل الطلب..." : `تأكيد الشراء (${course.price} ج.م)`}

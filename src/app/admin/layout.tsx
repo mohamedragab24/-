@@ -65,6 +65,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       items: [
         { label: "إدارة المالية", href: "/admin/finance", icon: BadgeCent },
         { label: "إدارة المحافظ", href: "/admin/payment-methods", icon: WalletCards },
+        { label: "مراجعة عمليات الدفع", href: "/admin/payment-review", icon: FileCheck },
         { label: "الكوبونات", href: "/admin/coupons", icon: Ticket },
       ]
     },
