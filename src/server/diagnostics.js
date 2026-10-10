@@ -33,6 +33,13 @@ function diagnose(e, ctx = {}) {
     return mk(String(e.code || 'internal'), String(e.message || 'حدث خطأ'), String(e.details.cause || ''), String(e.details.fix || ''));
   }
 
+  // 1.5) المستخدم لم يرسل توكن دخول صالحًا (HttpsError من الدوال نفسها) — ليس عطلًا في مفتاح السيرفر
+  if (e && e.code === 'unauthenticated' && ctx.stage !== 'init') {
+    return mk('unauthenticated', 'لازم تسجل الدخول أولاً',
+      'الطلب وصل للسيرفر بدون توكن دخول صالح: الحساب غير مسجّل في هذه اللحظة، أو الجلسة لم تجهز بعد، أو التطبيق يتصل بدومين/مشروع Firebase مختلف.',
+      'سجّل الخروج ثم سجّل الدخول من جديد. لو تكرر مع حساب مسجّل فعلًا: تأكد أن settings/app ← apiBaseUrl في Firestore هو دومين المنصة الحالي، وأن التطبيق والمنصة على نفس مشروع Firebase.');
+  }
+
   // 2) FIREBASE_SERVICE_ACCOUNT
   if (t.includes('firebase_service_account env var is missing') || (ctx.stage === 'init' && t.includes('firebase_service_account'))) {
     return mk('config/firebase-service-account-missing', 'إعداد السيرفر ناقص: FIREBASE_SERVICE_ACCOUNT',
