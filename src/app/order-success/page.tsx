@@ -89,7 +89,7 @@ dir="rtl"
     </div>
 
     <a
-      href={`fahemny://course-view?orderId=${encodeURIComponent(orderId)}`}
+      href={`fahmny://course-view?orderId=${encodeURIComponent(orderId)}`}
       className="block w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-semibold shadow-md transition"
     >
       المشاهدة في التطبيق

@@ -1,7 +1,7 @@
 # ربط روابط الكورسات بتطبيق مسار
 
 تم إعداد Digital Asset Links للموقع:
-https://fahmt-jonh-1s7o00cn6-fahemny.vercel.app/.well-known/assetlinks.json
+https://fahemt.online/.well-known/assetlinks.json
 
 Package name:
 com.Fahmani

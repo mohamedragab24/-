@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     statusBarStyle: 'default',
     title: 'فهمت',
   },
-  alternates: { canonical: 'https://fahemny.vercel.app/' },
+  alternates: { canonical: 'https://fahemt.online/' },
   robots: { index: true, follow: true },
   openGraph: {
     title: 'فهمت - منصة التعلم الذكي',
