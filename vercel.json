@@ -1,4 +1,5 @@
 {
   "framework": "nextjs",
+  "trailingSlash": false,
   "buildCommand": "if [ -f app/api/webhooks/meta/route.ts ]; then mkdir -p src/app/api/webhooks/meta; [ -f src/app/api/webhooks/meta/route.ts ] || cp app/api/webhooks/meta/route.ts src/app/api/webhooks/meta/route.ts; fi; rm -rf app; npm run build"
 }
