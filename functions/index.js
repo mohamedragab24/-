@@ -700,9 +700,9 @@ exports.getJaasMeetingToken = onCall(async (request) => {
     if (Number.isFinite(start) && Date.now() < start - 5 * 60 * 1000 && p.isAdmin !== true && p.role !== 'admin') throw new HttpsError('failed-precondition', 'لم يحن موعد المحاضرة بعد');
   }
   const appId = process.env.JAAS_APP_ID || 'vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034';
-  const keyId = process.env.JAAS_KEY_ID || '09cb60';
+  const keyId = process.env.JAAS_KEY_ID;
   const privateKey = process.env.JAAS_PRIVATE_KEY;
-  if (!appId || !keyId || !privateKey) throw new HttpsError('failed-precondition', 'إعدادات JaaS JWT غير مكتملة على الخادم');
+  if (!appId || !keyId || !privateKey) throw new HttpsError('failed-precondition', 'إعدادات JaaS JWT غير مكتملة: تحقق من JAAS_APP_ID وJAAS_KEY_ID وJAAS_PRIVATE_KEY في بيئة السيرفر.');
   const suppliedRoom = String(request.data?.room || '').trim();
   const room = suppliedRoom || (requestId ? `Fahimni_${requestId}` : '');
   if (!room || room.includes('/')) throw new HttpsError('invalid-argument', 'اسم الغرفة غير صحيح');

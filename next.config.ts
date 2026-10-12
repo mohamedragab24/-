@@ -1,6 +1,9 @@
 import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
+  // API POST endpoints must not be redirected (308 can break callable requests).
+  trailingSlash: false,
+  skipTrailingSlashRedirect: true,
   /* config options here */
   typescript: {
     ignoreBuildErrors: true,

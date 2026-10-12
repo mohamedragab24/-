@@ -429,9 +429,9 @@ exports.getGroupMeetingToken = onCall(async (request) => {
   const ss = await gs.ref.collection('sessions').doc(sessionId).get();
   if (!ss.exists || ss.data().status !== 'live') throw new HttpsError('failed-precondition', 'الجلسة غير متاحة الآن');
   const appId = process.env.JAAS_APP_ID || 'vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034';
-  const keyId = process.env.JAAS_KEY_ID || '09cb60';
+  const keyId = process.env.JAAS_KEY_ID;
   const privateKey = process.env.JAAS_PRIVATE_KEY;
-  if (!privateKey) throw new HttpsError('failed-precondition', 'إعدادات JaaS JWT غير مكتملة على الخادم');
+  if (!privateKey || !keyId) throw new HttpsError('failed-precondition', 'إعدادات JaaS غير مكتملة: أضف JAAS_KEY_ID وJAAS_PRIVATE_KEY في أسرار السيرفر ثم أعد النشر.');
   const room = String(ss.data().room);
   const me = (await db.collection('users').doc(uid).get()).data() || {};
   const now = Math.floor(Date.now() / 1000);

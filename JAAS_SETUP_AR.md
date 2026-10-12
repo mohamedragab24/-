@@ -13,7 +13,7 @@ firebase functions:secrets:set JAAS_WEBHOOK_SECRET
 ```
 
 - `JAAS_PRIVATE_KEY`: المفتاح الخاص الجديد من JaaS.
-- `JAAS_KEY_ID`: `09cb60` (تمت إضافته كقيمة افتراضية في النسخة).
+- `JAAS_KEY_ID`: معرّف المفتاح الفعلي من صف API Keys في التطبيق المحدد حاليًا. لا تستخدم قيمة تجريبية أو معرّفًا من تطبيق آخر.
 - `JAAS_WEBHOOK_SECRET`: السر الموجود في JaaS Console > Webhooks > Reveal secret.
 
 ## 2) النشر
@@ -61,7 +61,7 @@ Android يستخدم `FLAG_SECURE` لمنع Screenshot وتسجيل الشاشة
 
 ## بيانات JaaS المضافة للنسخة
 
-- App ID: `vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034`
-- Key ID: `09cb60`
+- App ID الظاهر في لقطة الشاشة الحالية: `vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034`
+- Key ID: يجب نسخه كاملًا من صف API Keys في نفس التطبيق؛ لا يتم تعيين قيمة افتراضية حتى لا يصدر JWT غير صالح.
 
 لا يتم تضمين Private Key داخل التطبيق أو ملفات المصدر. يجب وضعه كـFirebase Secret باسم `JAAS_PRIVATE_KEY`.
