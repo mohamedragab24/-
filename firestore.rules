@@ -282,6 +282,13 @@ service cloud.firestore {
       match /usage/{u} { allow read, write: if false; }
     }
 
+    // ملاحظات PDF: كل مستخدم يقرأ ويكتب ملاحظاته داخل users/{uid}/pdfNotes فقط.
+    // لا تمنح هذه القاعدة صلاحية الوصول إلى بيانات المستخدمين الآخرين.
+    match /users/{userId}/pdfNotes/{noteId} {
+      allow read, create, update, delete: if request.auth != null &&
+        (request.auth.uid == userId || isAdmin());
+    }
+
     match /groupInvites/{id} {
       allow read: if isSignedIn() && (resource.data.toUid == request.auth.uid || resource.data.ownerUid == request.auth.uid);
       allow write: if false;
