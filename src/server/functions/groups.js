@@ -441,21 +441,18 @@ exports.getGroupMeetingToken = onCall(async (request) => {
   }
   const ss = await gs.ref.collection('sessions').doc(sessionId).get();
   if (!ss.exists || ss.data().status !== 'live') throw new HttpsError('failed-precondition', 'الجلسة غير متاحة الآن');
-  const appId = process.env.JAAS_APP_ID || 'vpaas-magic-cookie-4ddd1f4050174a1b89a6ce9a82ade034';
-  const keyId = process.env.JAAS_KEY_ID;
-  const privateKey = process.env.JAAS_PRIVATE_KEY;
-  if (!privateKey || !keyId) throw new HttpsError('failed-precondition', 'إعدادات الاجتماع غير مكتملة على الخادم', { cause: 'المتغير JAAS_KEY_ID أو JAAS_PRIVATE_KEY غير موجود في بيئة السيرفر.', fix: 'JaaS Console ← API Keys ← استخدم معرّف المفتاح الفعلي ومحتوى ملف .pk في أسرار السيرفر، ثم أعد النشر.' });
-  const room = String(ss.data().room);
-  const me = (await db.collection('users').doc(uid).get()).data() || {};
-  const now = Math.floor(Date.now() / 1000);
-  const token = jwt.sign({
-    aud: 'jitsi', iss: 'chat', sub: appId, room, nbf: now - 5, exp: now + 3 * 60 * 60,
-    context: {
-      user: { id: uid, name: String(me.name || me.fullName || uid), email: String(me.email || ''), avatar: String(me.photoUrl || ''), moderator: String(isOwner) },
-      features: { recording: String(isOwner && ss.data().record === true), livestreaming: 'false', transcription: 'false', 'outbound-call': 'false', 'sip-outbound-call': 'false' },
-    },
-  }, privateKey.replace(/\\n/g, '\n'), { algorithm: 'RS256', keyid: keyId, header: { typ: 'JWT' } });
-  return { token, appId, room: `${appId}/${room}`, moderator: isOwner, record: ss.data().record === true };
+  const appId = String(process.env.AGORA_APP_ID || '').trim();
+  const certificate = String(process.env.AGORA_APP_CERTIFICATE || '').trim();
+  if (!appId || !certificate) throw new HttpsError('failed-precondition', 'إعدادات الاجتماع غير مكتملة على الخادم', { cause: 'ناقص في Vercel: ' + [!appId && 'AGORA_APP_ID', !certificate && 'AGORA_APP_CERTIFICATE'].filter(Boolean).join(', ') + '.', fix: 'أضف المتغيرات من Agora Console ← Project Management ثم Redeploy.' });
+  const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
+  const channel = `Group_${groupId}_${sessionId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  // Agora UID لازم يكون رقم صحيح موجب، ثابت لنفس المستخدم في نفس الجلسة.
+  let numericUid = 0;
+  for (const ch of `${uid}:${groupId}:${sessionId}`) numericUid = (Math.imul(numericUid, 31) + ch.charCodeAt(0)) >>> 0;
+  numericUid = (numericUid % 2147483646) + 1;
+  const expire = Math.floor(Date.now() / 1000) + 3 * 60 * 60;
+  const token = RtcTokenBuilder.buildTokenWithUid(appId, certificate, channel, numericUid, RtcRole.PUBLISHER, expire);
+  return { appId, channel, uid: numericUid, token, expiresAt: expire, moderator: isOwner, record: ss.data().record === true };
 });
 
 /** رابط رفع مؤقت (PUT) مباشر إلى R2 — للمُفهم صاحب المجموعة فقط. */
