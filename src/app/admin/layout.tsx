@@ -10,7 +10,7 @@ import {
   FileCheck, ShieldCheck, MessageSquare, Image as ImageIcon, 
   Layers, Filter, Palette, Share2, ClipboardList, Video, 
   History, Download, Ticket, CloudUpload, Bot, Bug, Lock, 
-  Fingerprint, Scale, Archive, GraduationCap, Bell, BookOpen, WalletCards
+  Fingerprint, Scale, Archive, GraduationCap, Bell, BookOpen, WalletCards, Smartphone
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -55,10 +55,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { label: "الطلبات المكتملة", href: "/admin/completed-orders", icon: CheckCircle2 },
         { label: "مراجعة المحاضرات", href: "/admin/sessions", icon: Video },
         { label: "المجموعات والفواتير", href: "/admin/groups", icon: Users },
-        { label: "الإشعارات والحملات", href: "/admin/notifications", icon: Bell },
         { label: "المحادثات المباشرة", href: "/admin/direct-chats", icon: MessageSquare },
         { label: "مراجعة معرض الأعمال", href: "/admin/portfolio-approvals", icon: ImageIcon },
         { label: "إدارة المعرض", href: "/admin/portfolio-management", icon: Layers },
+      ]
+    },
+    {
+      title: "التطبيق والإشعارات",
+      items: [
+        { label: "الإشعارات والحملات", href: "/admin/notifications", icon: Bell },
+        { label: "تحديثات التطبيق", href: "/admin/app-updates", icon: Smartphone },
       ]
     },
     {

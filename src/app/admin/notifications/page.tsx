@@ -18,7 +18,7 @@ export default function AdminNotifications(){
  const { firebaseApp, storage, firestore } = useFirebase();
  const [loading,setLoading]=useState(false);
  const [uploading,setUploading]=useState(false);
- const [f,setF]=useState({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:"",deliveryMode:"both"});
+ const [f,setF]=useState({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:"",deliveryMode:"push"}); // push = خارج التطبيق (شريط الهاتف) | in_app = داخل التطبيق
  const [history,setHistory]=useState<any[]>([]);
  useEffect(()=>{ if(!firestore) return; const q=query(collection(firestore,"scheduledNotifications"),orderBy("createdAt","desc"),limit(100)); return onSnapshot(q,s=>setHistory(s.docs.map(d=>({id:d.id,...d.data()})))); },[firestore]);
  const uploadImage=async(file:File)=>{
@@ -33,14 +33,14 @@ export default function AdminNotifications(){
    } finally { setUploading(false); }
  };
  const submit=async()=>{
-   if(!f.title||!f.body||!f.sendAt){toast({variant:"destructive",title:"أكمل البيانات",description:"العنوان والرسالة ووقت الإرسال مطلوبة."});return;}
+   if(!f.title||!f.body){toast({variant:"destructive",title:"أكمل البيانات",description:"العنوان والرسالة مطلوبان."});return;}
    setLoading(true);
    try {
      if(!firebaseApp) throw new Error('Firebase غير جاهز');
      const fn=httpsCallable(getFunctions(firebaseApp,'us-central1'),'scheduleNotification');
-     await fn({...f,audience:'all',sendAt:new Date(f.sendAt).toISOString()});
-     toast({title:"تمت جدولة الإشعار",description:"سيظهر داخل التطبيق وسيصل Push للأجهزة المسجلة."});
-     setF({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:"",deliveryMode:"both"});
+     const res:any=await fn({...f,audience:'all',sendAt:f.sendAt?new Date(f.sendAt).toISOString():''});
+     toast({title:res?.data?.immediate?"تم إرسال الإشعار":"تمت جدولة الإشعار",description:res?.data?.immediate?(f.deliveryMode==='push'?`وصل لـ ${res.data.sent} جهاز في شريط الهاتف.`:`ظهر داخل التطبيق لـ ${res.data.inApp} مستخدم.`):"سيُرسل في الموعد المحدد."});
+     setF({title:"",body:"",imageUrl:"",campaign:"",description:"",sendAt:"",deliveryMode:"push"});
    } catch(e:any) { toast({variant:"destructive",title:"تعذر الجدولة",description:e?.message||"حدث خطأ"}); } finally { setLoading(false); }
  };
  return <div className="p-6 md:p-10 space-y-8 max-w-4xl mx-auto" dir="rtl">
@@ -50,9 +50,12 @@ export default function AdminNotifications(){
     <div><Label>الرسالة</Label><Textarea value={f.body} onChange={e=>setF({...f,body:e.target.value})}/></div>
     <div><Label>الوصف</Label><Textarea value={f.description} onChange={e=>setF({...f,description:e.target.value})}/></div>
     <div className="space-y-3"><Label>صورة الإشعار</Label><div className="flex items-center gap-3"><label className="inline-flex items-center gap-2 rounded-xl border px-4 py-3 font-bold cursor-pointer hover:bg-zinc-50"><ImagePlus className="w-5 h-5"/> رفع صورة من الجهاز<input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e=>{const file=e.target.files?.[0]; if(file) uploadImage(file).catch(err=>toast({variant:'destructive',title:'فشل رفع الصورة',description:err?.message||'تعذر الرفع'}));}}/></label>{uploading&&<Loader2 className="animate-spin"/>}</div>{f.imageUrl&&<img src={f.imageUrl} alt="صورة الإشعار" className="h-28 w-48 object-cover rounded-xl border"/>}</div>
-    <div><Label>وقت الإرسال</Label><Input type="datetime-local" value={f.sendAt} onChange={e=>setF({...f,sendAt:e.target.value})}/></div>
-    <div><Label>مكان ظهور الرسالة</Label><select value={f.deliveryMode} onChange={e=>setF({...f,deliveryMode:e.target.value})} className="w-full rounded-xl border bg-background px-3 py-3"><option value="both">داخل التطبيق وخارجه (إشعار Push)</option><option value="in_app">داخل التطبيق فقط</option><option value="push">خارج التطبيق فقط (Push)</option></select></div>
-    <Button disabled={loading||uploading} onClick={submit} className="h-16 w-full rounded-2xl font-black text-xl">{loading?<Loader2 className="animate-spin"/>:<CalendarClock/>} جدولة الإشعار</Button>
+    <div><Label>وقت الإرسال (اتركه فارغًا للإرسال الآن)</Label><Input type="datetime-local" value={f.sendAt} onChange={e=>setF({...f,sendAt:e.target.value})}/></div>
+    <div className="space-y-2"><Label>مكان ظهور الرسالة</Label><div className="grid sm:grid-cols-2 gap-3">
+      <button type="button" onClick={()=>setF({...f,deliveryMode:"in_app"})} className={"rounded-2xl border-2 p-4 text-right transition "+(f.deliveryMode==="in_app"?"border-primary bg-primary/5":"hover:bg-zinc-50")}><p className="font-black">داخل التطبيق</p><p className="text-xs text-muted-foreground mt-1">تظهر في شاشة الإشعارات داخل التطبيق.</p></button>
+      <button type="button" onClick={()=>setF({...f,deliveryMode:"push"})} className={"rounded-2xl border-2 p-4 text-right transition "+(f.deliveryMode==="push"?"border-primary bg-primary/5":"hover:bg-zinc-50")}><p className="font-black">خارج التطبيق</p><p className="text-xs text-muted-foreground mt-1">تصل في شريط إشعارات الهاتف بالعنوان والوصف والصورة.</p></button>
+    </div></div>
+    <Button disabled={loading||uploading} onClick={submit} className="h-16 w-full rounded-2xl font-black text-xl">{loading?<Loader2 className="animate-spin"/>:<CalendarClock/>} {f.sendAt?"جدولة الإشعار":"إرسال الآن"}</Button>
    </CardContent></Card>
    <Card className="rounded-[2.5rem] shadow-xl">
     <CardHeader><CardTitle>سجل الإشعارات والحملات السابقة</CardTitle></CardHeader>

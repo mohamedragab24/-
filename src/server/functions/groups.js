@@ -94,6 +94,29 @@ async function loadOwnedGroup(uid, groupId, { requireActive = true } = {}) {
   return { ref, g, id };
 }
 
+const EDITOR_PERMS = ['uploadVideos', 'uploadFiles', 'createQuizzes', 'manageSessions', 'addStudents'];
+
+/**
+ * بديل loadOwnedGroup للإجراءات التي يسمح بها صاحب المجموعة أو المحرر الذي عنده الصلاحية [perm].
+ * (الأدمن مسموح له دائمًا كما في loadOwnedGroup.)
+ */
+async function loadManageableGroup(uid, groupId, perm, { requireActive = true } = {}) {
+  const id = String(groupId || '').trim();
+  if (!id) throw new HttpsError('invalid-argument', 'معرف المجموعة غير صحيح');
+  const ref = db.collection('groups').doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'المجموعة غير موجودة');
+  const g = snap.data() || {};
+  let allowed = g.ownerUid === uid || (await isAdminUid(uid));
+  if (!allowed && perm) {
+    const m = (await ref.collection('members').doc(uid).get()).data() || {};
+    allowed = m.role === 'editor' && !!m.permissions && m.permissions[perm] === true;
+  }
+  if (!allowed) throw new HttpsError('permission-denied', 'ليست لديك صلاحية لهذا الإجراء في المجموعة');
+  if (requireActive && g.status === 'frozen') throw new HttpsError('failed-precondition', 'المجموعة مجمّدة بسبب رسوم غير مدفوعة');
+  return { ref, g, id };
+}
+
 async function walletBalance(uid) {
   const wallet = await db.collection('wallets').doc(uid).get();
   if (wallet.exists && Number.isFinite(Number(wallet.data()?.balance))) return round2(wallet.data().balance);
@@ -175,9 +198,30 @@ exports.createGroup = onCall(async (request) => {
   return { ok: true, groupId: ref.id };
 });
 
+/** تعيين/تعديل/إلغاء محرر — لصاحب المجموعة فقط. data: { groupId, uid, editor: bool, permissions: {...} } */
+exports.setGroupEditor = onCall(async (request) => {
+  const uid = reqUid(request);
+  const { ref, g, id } = await loadOwnedGroup(uid, request.data?.groupId); // صاحب المجموعة فقط
+  const memberUid = String(request.data?.uid || '').trim();
+  if (!memberUid) throw new HttpsError('invalid-argument', 'الطالب غير محدد');
+  const mRef = ref.collection('members').doc(memberUid);
+  const m = await mRef.get();
+  if (!m.exists) throw new HttpsError('not-found', 'هذا الشخص ليس عضوًا في المجموعة');
+
+  if (request.data?.editor === true) {
+    const input = request.data?.permissions || {};
+    const permissions = Object.fromEntries(EDITOR_PERMS.map((k) => [k, input[k] === true]));
+    await mRef.update({ role: 'editor', permissions, editorSince: FV.serverTimestamp() });
+    await notify(memberUid, 'تم تعيينك محررًا', `عيّنك المُفهم محررًا في مجموعة «${g.name}»`, { type: 'group_editor', groupId: id });
+  } else {
+    await mRef.update({ role: 'student', permissions: FV.delete(), editorSince: FV.delete() });
+  }
+  return { ok: true };
+});
+
 exports.sendGroupInvite = onCall(async (request) => {
   const uid = reqUid(request);
-  const { ref, g, id } = await loadOwnedGroup(uid, request.data?.groupId);
+  const { ref, g, id } = await loadManageableGroup(uid, request.data?.groupId, 'addStudents');
   const publicId = String(request.data?.publicId || '').trim().toLowerCase();
   if (!/^[0-9a-z]{8}$/.test(publicId)) throw new HttpsError('invalid-argument', 'الرقم التعريفي يتكون من 8 أرقام/حروف إنجليزية');
   const idSnap = await db.collection('publicIds').doc(publicId).get();
@@ -268,9 +312,9 @@ exports.deleteGroup = onCall({ secrets: R2_SECRETS, timeoutSeconds: 540 }, async
 // ---------------------------------------------------------------- المحتوى
 exports.registerGroupContent = onCall(async (request) => {
   const uid = reqUid(request);
-  const { ref, id } = await loadOwnedGroup(uid, request.data?.groupId);
   const kind = String(request.data?.kind || '');
   if (!['videos', 'files'].includes(kind)) throw new HttpsError('invalid-argument', 'نوع المحتوى غير صحيح');
+  const { ref, id } = await loadManageableGroup(uid, request.data?.groupId, kind === 'videos' ? 'uploadVideos' : 'uploadFiles');
   const title = String(request.data?.title || '').trim().slice(0, 120);
   const r2Key = String(request.data?.r2Key || '').trim();
   const size = Math.max(0, Math.floor(Number(request.data?.size || 0)));
@@ -286,7 +330,7 @@ exports.registerGroupContent = onCall(async (request) => {
 
 exports.createGroupQuiz = onCall(async (request) => {
   const uid = reqUid(request);
-  const { ref } = await loadOwnedGroup(uid, request.data?.groupId);
+  const { ref } = await loadManageableGroup(uid, request.data?.groupId, 'createQuizzes');
   const title = String(request.data?.title || '').trim().slice(0, 120);
   const questions = Array.isArray(request.data?.questions) ? request.data.questions : [];
   if (!title || questions.length < 1 || questions.length > 100) throw new HttpsError('invalid-argument', 'الاختبار يحتاج عنوانًا وسؤالًا واحدًا على الأقل');
@@ -379,7 +423,7 @@ exports.submitGroupQuiz = onCall(async (request) => {
 // ---------------------------------------------------------------- الجلسات
 exports.startGroupSession = onCall(async (request) => {
   const uid = reqUid(request);
-  const { ref, g, id } = await loadOwnedGroup(uid, request.data?.groupId);
+  const { ref, g, id } = await loadManageableGroup(uid, request.data?.groupId, 'manageSessions');
   const record = request.data?.record === true;
   const title = String(request.data?.title || '').trim().slice(0, 120) || `جلسة ${new Date().toLocaleDateString('ar-EG', { timeZone: TZ })}`;
   const doc = ref.collection('sessions').doc();
@@ -391,7 +435,7 @@ exports.startGroupSession = onCall(async (request) => {
 
 exports.endGroupSession = onCall(async (request) => {
   const uid = reqUid(request);
-  const { ref } = await loadOwnedGroup(uid, request.data?.groupId, { requireActive: false });
+  const { ref } = await loadManageableGroup(uid, request.data?.groupId, 'manageSessions', { requireActive: false });
   const sid = String(request.data?.sessionId || '').trim();
   const sRef = ref.collection('sessions').doc(sid);
   const s = await sRef.get();
@@ -415,7 +459,7 @@ exports.endGroupSession = onCall(async (request) => {
 
 exports.attachGroupRecording = onCall(async (request) => {
   const uid = reqUid(request);
-  const { ref, id } = await loadOwnedGroup(uid, request.data?.groupId, { requireActive: false });
+  const { ref, id } = await loadManageableGroup(uid, request.data?.groupId, 'manageSessions', { requireActive: false });
   const sid = String(request.data?.sessionId || '').trim();
   const r2Key = String(request.data?.r2Key || '').trim();
   const size = Math.max(0, Math.floor(Number(request.data?.size || 0)));
@@ -436,8 +480,13 @@ exports.getGroupMeetingToken = onCall(async (request) => {
   const g = gs.data();
   if (g.status !== 'active') throw new HttpsError('failed-precondition', 'المجموعة متوقفة مؤقتًا');
   const isOwner = g.ownerUid === uid;
-  if (!isOwner && !(await isAdminUid(uid))) {
-    if (!(await gs.ref.collection('members').doc(uid).get()).exists) throw new HttpsError('permission-denied', 'الجلسة لأعضاء المجموعة فقط');
+  const isAdm = !isOwner && (await isAdminUid(uid));
+  let isSessionEditor = false;
+  if (!isOwner && !isAdm) {
+    const mem = await gs.ref.collection('members').doc(uid).get();
+    if (!mem.exists) throw new HttpsError('permission-denied', 'الجلسة لأعضاء المجموعة فقط');
+    const md = mem.data() || {};
+    isSessionEditor = md.role === 'editor' && !!md.permissions && md.permissions.manageSessions === true;
   }
   const ss = await gs.ref.collection('sessions').doc(sessionId).get();
   if (!ss.exists || ss.data().status !== 'live') throw new HttpsError('failed-precondition', 'الجلسة غير متاحة الآن');
@@ -452,15 +501,15 @@ exports.getGroupMeetingToken = onCall(async (request) => {
   numericUid = (numericUid % 2147483646) + 1;
   const expire = Math.floor(Date.now() / 1000) + 3 * 60 * 60;
   const token = RtcTokenBuilder.buildTokenWithUid(appId, certificate, channel, numericUid, RtcRole.PUBLISHER, expire);
-  return { appId, channel, uid: numericUid, token, expiresAt: expire, moderator: isOwner, record: ss.data().record === true };
+  return { appId, channel, uid: numericUid, token, expiresAt: expire, moderator: isOwner || isSessionEditor, record: ss.data().record === true };
 });
 
 /** رابط رفع مؤقت (PUT) مباشر إلى R2 — للمُفهم صاحب المجموعة فقط. */
 exports.createGroupUploadUrl = onCall({ secrets: R2_SECRETS }, async (request) => {
   const uid = reqUid(request);
-  const { id } = await loadOwnedGroup(uid, request.data?.groupId);
   const kind = String(request.data?.kind || '');
   if (!['videos', 'files'].includes(kind)) throw new HttpsError('invalid-argument', 'نوع المحتوى غير صحيح');
+  const { id } = await loadManageableGroup(uid, request.data?.groupId, kind === 'videos' ? 'uploadVideos' : 'uploadFiles');
   const contentType = String(request.data?.contentType || 'application/octet-stream');
   if (kind === 'files' && contentType !== 'application/pdf') throw new HttpsError('invalid-argument', 'الملفات يجب أن تكون PDF');
   if (kind === 'videos' && !contentType.startsWith('video/')) throw new HttpsError('invalid-argument', 'الملف يجب أن يكون فيديو');

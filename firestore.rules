@@ -126,6 +126,36 @@ service cloud.firestore {
       }
     }
 
+    // تحديثات التطبيق: القراءة للجميع (الفحص يتم قبل تسجيل الدخول)، والكتابة للأدمن فقط
+    match /appUpdates/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /progress/{id} {
+      allow read: if isSignedIn() && (resource == null || resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid;
+      allow delete: if false;
+    }
+    match /bookmarks/{id} {
+      allow read: if isSignedIn() && (resource == null || resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+    }
+    match /notes/{id} {
+      allow read: if isSignedIn() && (resource == null || resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+    }
+    match /contentReports/{id} {
+      allow create: if isSignedIn();
+    }
+    match /telegramTransactions/{id} { allow read, write: if isAdmin(); }
+    match /paymentTxKeys/{id} { allow read, write: if isAdmin(); }
+    match /paymentProviders/{id} { allow read, write: if isAdmin(); }
+    match /lectureRecordings/{id} { allow read, write: if isAdmin(); }
+
     // الإعدادات العامة والأصول
     match /settings/{id} {
       allow read: if true;
@@ -256,8 +286,12 @@ service cloud.firestore {
       allow write: if false;
 
       match /members/{uid} {
+        // صاحب المجموعة، أو العضو نفسه، أو «محرر» عنده صلاحية إضافة الطلاب (يرى قائمة الطلاب)
         allow read: if isSignedIn() && (uid == request.auth.uid ||
-          get(/databases/$(database)/documents/groups/$(gid)).data.ownerUid == request.auth.uid);
+          get(/databases/$(database)/documents/groups/$(gid)).data.ownerUid == request.auth.uid ||
+          (exists(/databases/$(database)/documents/groups/$(gid)/members/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/groups/$(gid)/members/$(request.auth.uid)).data.role == 'editor' &&
+            get(/databases/$(database)/documents/groups/$(gid)/members/$(request.auth.uid)).data.permissions.addStudents == true));
         allow write: if false;
       }
 

@@ -635,8 +635,25 @@ exports.scheduleNotification = onCall(async (request) => {
   const { title, body, imageUrl, campaign, description, sendAt, audience } = request.data || {};
   const deliveryMode = String(request.data?.deliveryMode || 'both');
   if (!['both', 'in_app', 'push'].includes(deliveryMode)) throw new HttpsError('invalid-argument', 'قناة الإرسال غير صحيحة');
+  if (!title || !body) throw new HttpsError('invalid-argument', 'العنوان والرسالة مطلوبان');
+  if (!String(sendAt || '').trim()) {
+    // بدون موعد = إرسال فوري لكل المستخدمين (الجدولة التلقائية لا تعمل على Vercel بدون cron)
+    const { pushToAll, inAppToAll } = require('./push');
+    const mode = deliveryMode === 'in_app' ? 'in_app' : 'push';
+    const rec = db.collection('scheduledNotifications').doc();
+    let sent = 0, failed = 0, inApp = 0, lastError = '';
+    if (mode === 'push') {
+      const r = await pushToAll({ title: String(title), body: String(body), imageUrl: String(imageUrl || ''), data: { type: 'admin_campaign', notificationId: rec.id, campaign: String(campaign || '') } });
+      sent = r.sent; failed = r.failed; lastError = r.devices === 0 ? 'لا توجد أجهزة مسجلة لاستقبال إشعارات Push' : r.lastError;
+    } else {
+      inApp = (await inAppToAll({ title: String(title), body: String(body), imageUrl: String(imageUrl || ''), campaign: String(campaign || ''), description: String(description || ''), docId: rec.id })).users;
+    }
+    const status = mode === 'push' ? (sent === 0 ? 'failed' : failed > 0 ? 'partial' : 'sent') : 'sent';
+    await rec.set({ title: String(title), body: String(body), imageUrl: String(imageUrl || ''), campaign: String(campaign || ''), description: String(description || ''), audience: 'all', deliveryMode: mode, status, sentCount: sent, failedCount: failed, inAppCount: inApp, lastError, createdBy: uid, createdAt: admin.firestore.FieldValue.serverTimestamp(), sentAt: admin.firestore.FieldValue.serverTimestamp(), sendAt: admin.firestore.FieldValue.serverTimestamp() });
+    return { id: rec.id, immediate: true, sent, failed, inApp };
+  }
   const date = new Date(String(sendAt || ''));
-  if (!title || !body || Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) throw new HttpsError('invalid-argument', 'بيانات الإشعار أو الموعد غير صحيحة');
+  if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) throw new HttpsError('invalid-argument', 'بيانات الإشعار أو الموعد غير صحيحة');
   const ref = await db.collection('scheduledNotifications').add({ title: String(title), body: String(body), imageUrl: String(imageUrl || ''), campaign: String(campaign || ''), description: String(description || ''), audience: String(audience || 'all'), sendAt: admin.firestore.Timestamp.fromDate(date), status: 'pending', deliveryMode, createdBy: uid, createdAt: admin.firestore.FieldValue.serverTimestamp() });
   return { id: ref.id };
 });
@@ -912,3 +929,4 @@ Object.assign(exports, require('./groups'));
 Object.assign(exports, require('./payments-admin'));
 Object.assign(exports, require('./recordings'));
 Object.assign(exports, require('./system-check'));
+Object.assign(exports, require('./app-updates'));
