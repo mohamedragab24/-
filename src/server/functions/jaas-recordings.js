@@ -37,7 +37,9 @@ async function describe(info) {
   if (info.kind === 'group') {
     const g = (await db().collection('groups').doc(info.groupId).get()).data() || {};
     const s = (await db().collection('groups').doc(info.groupId).collection('sessions').doc(info.sessionId).get()).data() || {};
-    return { id: info.sessionId, title: s.title || 'جلسة', groupId: info.groupId, groupName: g.name || '', ownerUid: g.ownerUid || '', ownerName: g.ownerName || '', sessionId: info.sessionId };
+    let title = s.title;
+    if (!title) { try { title = (await db().collection('lectureRecordings').doc(info.sessionId).get()).data()?.title; } catch (_) {} }  // الجلسة تُحذف عند إنهائها فنأخذ العنوان من التسجيل
+    return { id: info.sessionId, title: title || 'جلسة', groupId: info.groupId, groupName: g.name || '', ownerUid: g.ownerUid || '', ownerName: g.ownerName || '', sessionId: info.sessionId };
   }
   const m = (await db().collection('istifhams').doc(info.requestId).get()).data() || {};
   return { id: `m_${info.requestId}`, title: m.title || 'محاضرة', groupId: '', groupName: 'محاضرة خاصة', ownerUid: m.mufhemId || '', ownerName: m.mufhemName || '', requestId: info.requestId };

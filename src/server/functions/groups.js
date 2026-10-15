@@ -430,6 +430,15 @@ exports.startGroupSession = onCall(async (request) => {
   await doc.set({ title, record, status: 'live', startedAt: FV.serverTimestamp(), room: `Fahimni_group_${id}_${doc.id}` });
   const members = await ref.collection('members').get();
   for (const m of members.docs) await notify(m.id, 'بدأت جلسة جديدة', `بدأ المُفهم جلسة في «${g.name}» — ادخل من التطبيق`, { type: 'group_session', groupId: id, sessionId: doc.id }, `gsession_${doc.id}`);
+  // إشعار في شريط إشعارات الهاتف لكل أعضاء المجموعة (غير صاحب الجلسة)
+  try {
+    const { pushToUids } = require('./push');
+    await pushToUids(members.docs.map((m) => m.id).filter((m) => m !== uid), {
+      title: 'يوجد اجتماع الآن في مجموعتك',
+      body: `بدأ اجتماع «${title}» في «${g.name}» — ادخل من تطبيق فهمت`,
+      data: { type: 'group_session', groupId: id, sessionId: doc.id },
+    });
+  } catch (e) { console.error('group session push failed', e); }
   return { ok: true, sessionId: doc.id, room: `Fahimni_group_${id}_${doc.id}` };
 });
 
@@ -441,7 +450,17 @@ exports.endGroupSession = onCall(async (request) => {
   const s = await sRef.get();
   if (!s.exists) throw new HttpsError('not-found', 'الجلسة غير موجودة');
   const d = s.data();
-  await sRef.update({ status: 'ended', endedAt: FV.serverTimestamp() });
+  // إنهاء الاجتماع: يُحذف من المجموعة فيختفي عند الجميع (والمتصلون يُخرَجون تلقائيًا من التطبيق)،
+  // ويُحذف إشعار «بدأت جلسة» من كل الأعضاء. التسجيل (إن وُجد) يبقى في «الجلسات المسجلة».
+  await sRef.delete();
+  try {
+    const members = await ref.collection('members').get();
+    for (let i = 0; i < members.docs.length; i += 200) {
+      const batch = db.batch();
+      for (const m of members.docs.slice(i, i + 200)) batch.delete(db.collection('users').doc(m.id).collection('notifications').doc(`gsession_${sid}`));
+      await batch.commit();
+    }
+  } catch (e) { console.error('delete session notifications failed', e); }
   if (d.record) {
     // يُضاف تلقائيًا لقسم الجلسات المسجلة؛ يكتمل الملف عند وصول تسجيل JaaS (webhook).
     // لا نعيد حالة تسجيل اكتمل رفعه بالفعل (الـ webhook قد يسبق إنهاء الجلسة).

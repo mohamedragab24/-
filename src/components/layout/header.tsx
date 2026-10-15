@@ -87,8 +87,6 @@ export function Header() {
           <div className="flex items-center gap-1 md:gap-4 shrink-0">
             <nav className="hidden md:flex items-center gap-2 pl-4 border-l border-zinc-100">
               <HeaderNavLink href="/courses" icon={Layers} label="الكورسات" />
-              {user && <HeaderNavLink href="/courses?tab=enrolled" icon={BookOpen} label="كورساتي" />}
-              {user && <HeaderNavLink href="/groups" icon={Users} label="المجموعات" />}
               <HeaderNavLink href="/teachers" icon={GraduationCap} label="المُفهمين" />
               <HeaderNavLink href="/portfolio" icon={Layout} label="أعمال المفهمين" />
               <HeaderNavLink href="/browse" icon={Search} label="الاستفهامات" />

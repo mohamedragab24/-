@@ -63,4 +63,43 @@ async function inAppToAll({ title, body, imageUrl = '', campaign = '', descripti
   return { users: users.size };
 }
 
-module.exports = { pushToAll, inAppToAll };
+/** Push (شريط الهاتف) لمستخدمين محددين فقط — مثل أعضاء مجموعة عند بدء اجتماع. */
+async function pushToUids(uids, { title, body, imageUrl = '', data = {} }) {
+  const tokens = [];
+  const seen = new Set();
+  for (const uid of uids) {
+    try {
+      const snap = await db.collection('users').doc(uid).collection('fcmTokens').get();
+      for (const d of snap.docs) {
+        const token = d.data()?.token;
+        if (!token || seen.has(token)) continue;
+        seen.add(token);
+        tokens.push({ token, ref: d.ref });
+      }
+    } catch (_) {}
+  }
+  let sent = 0, failed = 0;
+  const strData = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v ?? '')]));
+  for (let i = 0; i < tokens.length; i += 500) {
+    const chunk = tokens.slice(i, i + 500);
+    try {
+      const res = await admin.messaging().sendEachForMulticast({
+        tokens: chunk.map((t) => t.token),
+        notification: { title, body, ...(imageUrl ? { imageUrl } : {}) },
+        android: { priority: 'high', notification: { sound: 'default' } },
+        apns: { payload: { aps: { sound: 'default' } } },
+        data: strData,
+      });
+      sent += res.successCount; failed += res.failureCount;
+      await Promise.all(res.responses.map(async (r, idx) => {
+        if (r.success) return;
+        if (['messaging/registration-token-not-registered', 'messaging/invalid-registration-token'].includes(r.error?.code)) {
+          try { await chunk[idx].ref.delete(); } catch (_) {}
+        }
+      }));
+    } catch (e) { failed += chunk.length; }
+  }
+  return { devices: tokens.length, sent, failed };
+}
+
+module.exports = { pushToAll, inAppToAll, pushToUids };

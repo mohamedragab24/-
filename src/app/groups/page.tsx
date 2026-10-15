@@ -55,7 +55,6 @@ export default function GroupsPage() {
 
   const userRef = useMemoFirebase(() => (firestore && user ? doc(firestore, "users", user.uid) : null), [firestore, user]);
   const { data: profile } = useDoc<any>(userRef);
-  const isMufhem = profile?.role === "mufhem";
 
   const [publicId, setPublicId] = useState<string>("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -71,9 +70,9 @@ export default function GroupsPage() {
   }, [user, profile]);
 
   // للمُفهم: مجموعاتي
-  const ownedQuery = useMemoFirebase(() => (firestore && user && isMufhem ? query(collection(firestore, "groups"), where("ownerUid", "==", user.uid)) : null), [firestore, user, isMufhem]);
+  const ownedQuery = useMemoFirebase(() => (firestore && user ? query(collection(firestore, "groups"), where("ownerUid", "==", user.uid)) : null), [firestore, user]);
   const { data: owned, isLoading: ownedLoading } = useCollection<any>(ownedQuery);
-  const billsQuery = useMemoFirebase(() => (firestore && user && isMufhem ? query(collection(firestore, "groupBills"), where("ownerUid", "==", user.uid)) : null), [firestore, user, isMufhem]);
+  const billsQuery = useMemoFirebase(() => (firestore && user ? query(collection(firestore, "groupBills"), where("ownerUid", "==", user.uid)) : null), [firestore, user]);
   const { data: bills } = useCollection<any>(billsQuery);
 
   // للمُستفهم: الدعوات + المجموعات المنضم إليها
@@ -120,9 +119,9 @@ export default function GroupsPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="border-r-8 border-primary pr-5">
           <h1 className="text-3xl md:text-4xl font-black">المجموعات</h1>
-          <p className="text-zinc-500 font-bold mt-1">{isMufhem ? "المجموعات التي تديرها" : "المجموعات التي انضممت إليها ودعوات الانضمام"}</p>
+          <p className="text-zinc-500 font-bold mt-1">المجموعات التي أنشأتها والمجموعات التي انضممت إليها</p>
         </div>
-        {isMufhem && <Button onClick={() => setCreateOpen(true)} className="h-12 rounded-2xl font-black gap-2"><Plus size={18} /> مجموعة جديدة</Button>}
+        <Button onClick={() => setCreateOpen(true)} className="h-12 rounded-2xl font-black gap-2"><Plus size={18} /> إنشاء مجموعة جديدة</Button>
       </div>
 
       {/* الرقم التعريفي */}
@@ -139,7 +138,7 @@ export default function GroupsPage() {
       </Card>
 
       {/* فواتير المُفهم (تظهر له فقط) */}
-      {isMufhem && (owned?.length || 0) > 0 && (
+      {(owned?.length || 0) > 0 && (
         <Card className="rounded-[2rem] border-2">
           <CardContent className="p-5 space-y-3 text-right">
             <p className="font-black flex items-center gap-2 justify-end"><Wallet size={18} /> رسوم المجموعات الأسبوعية</p>
@@ -176,17 +175,19 @@ export default function GroupsPage() {
         </section>
       )}
 
-      {/* مجموعاتي */}
+      {/* مجموعات أنشأتها */}
       <section className="space-y-3">
-        <h2 className="text-xl font-black flex items-center gap-2"><Users size={20} /> {isMufhem ? "مجموعاتي" : "مجموعاتي المنضم إليها"}</h2>
-        {isMufhem ? (
-          ownedLoading ? <Loader2 className="animate-spin" /> :
+        <h2 className="text-xl font-black flex items-center gap-2"><Users size={20} /> مجموعات أنشأتها</h2>
+        {ownedLoading ? <Loader2 className="animate-spin" /> :
           (owned?.length ? <div className="grid md:grid-cols-2 gap-4">{owned.map((g: any) => <GroupCard key={g.id} id={g.id} g={g} owner />)}</div>
-            : <p className="text-zinc-500 font-bold">لم تنشئ أي مجموعة بعد. اضغط «مجموعة جديدة» للبدء.</p>)
-        ) : (
-          memberships?.length ? <div className="grid md:grid-cols-2 gap-4">{memberships.map((m: any) => <MembershipCard key={m.id} groupId={m.groupId} />)}</div>
-            : <p className="text-zinc-500 font-bold">لم تنضم لأي مجموعة بعد. عندما يدعوك مُفهم برقمك التعريفي ستظهر الدعوة هنا.</p>
-        )}
+            : <p className="text-zinc-500 font-bold">لم تنشئ أي مجموعة بعد. اضغط «إنشاء مجموعة جديدة» للبدء.</p>)}
+      </section>
+
+      {/* مجموعات انضممت لها (بعد قبول الدعوة) */}
+      <section className="space-y-3">
+        <h2 className="text-xl font-black flex items-center gap-2"><Users size={20} /> مجموعات انضممت لها</h2>
+        {memberships?.length ? <div className="grid md:grid-cols-2 gap-4">{memberships.map((m: any) => <MembershipCard key={m.id} groupId={m.groupId} />)}</div>
+          : <p className="text-zinc-500 font-bold">لم تنضم لأي مجموعة بعد. عندما يدعوك صاحب مجموعة برقمك التعريفي ستظهر الدعوة هنا، وتنضم بعد قبولها.</p>}
       </section>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

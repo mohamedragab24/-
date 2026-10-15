@@ -90,6 +90,9 @@ const purchasedByUser: Record<string, Set<string>> = {};
 export async function syncPurchasedCourses(db: any, uid?: string | null): Promise<void> {
   if (!db || !uid) return;
   try {
+    // لا نستدعي السيرفر بدون جلسة دخول فعلية (يمنع خطأ «لازم تسجل الدخول أولاً» عند تسجيل الخروج)
+    const { getAuth } = await import("firebase/auth");
+    if (!getAuth().currentUser) { delete purchasedByUser[uid]; return; }
     // الدوال تعمل على Vercel عبر /api/fn (وليس Cloud Functions) — لذلك نستخدم fn-client وليس firebase/functions
     const { getFunctions, httpsCallable } = await import("./fn-client");
     const functions = getFunctions(undefined, "us-central1");

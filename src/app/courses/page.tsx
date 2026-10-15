@@ -79,6 +79,10 @@ export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [enrollments, setEnrollments] = useState<CourseEnrollment[]>([]);
   const [activeTab, setActiveTab] = useState(isMufhem ? "instructor" : "all");
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("tab");
+    if (q === "enrolled" || q === "instructor" || q === "all") setActiveTab(q);
+  }, []);
   const [selectedCategory, setSelectedCategory] = useState("الكل");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -233,45 +237,28 @@ export default function CoursesPage() {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <TabsList className="bg-white dark:bg-zinc-900 p-1.5 rounded-2xl border shadow-sm h-auto flex flex-wrap gap-1">
-              {isMufhem ? (
-                /* تبويبات المُفهم: إدارة كورساته + معاينة تصفح الطلاب */
-                <>
-                  <TabsTrigger
-                    value="instructor"
-                    className="rounded-xl px-6 py-3 font-black text-sm data-[state=active]:bg-primary data-[state=active]:text-white gap-2"
-                  >
-                    <Layers size={16} />
-                    إدارة كورساتي ومبيعاتي ({instructorCourses.length})
-                  </TabsTrigger>
-
-                  <TabsTrigger
-                    value="all"
-                    className="rounded-xl px-6 py-3 font-black text-sm data-[state=active]:bg-primary data-[state=active]:text-white gap-2"
-                  >
-                    <BookOpen size={16} />
-                    معاينة تصفح الكورسات ({publicCourses.length})
-                  </TabsTrigger>
-                </>
-              ) : (
-                /* تبويبات المُستفهم (الطالب): تصفح الكورسات + كورساتي المشتركة */
-                <>
-                  <TabsTrigger
-                    value="all"
-                    className="rounded-xl px-6 py-3 font-black text-sm data-[state=active]:bg-primary data-[state=active]:text-white gap-2"
-                  >
-                    <BookOpen size={16} />
-                    تصفح الكورسات ({publicCourses.length})
-                  </TabsTrigger>
-
-                  <TabsTrigger
-                    value="enrolled"
-                    className="rounded-xl px-6 py-3 font-black text-sm data-[state=active]:bg-primary data-[state=active]:text-white gap-2"
-                  >
-                    <CheckCircle size={16} />
-                    كورساتي ({myEnrolledCourses.length})
-                  </TabsTrigger>
-                </>
-              )}
+              {/* ثلاثة أقسام لكل المستخدمين: كورسات أنشأتها / كورسات اشتريتها / جميع الكورسات */}
+                <TabsTrigger
+                  value="instructor"
+                  className="rounded-xl px-6 py-3 font-black text-sm data-[state=active]:bg-primary data-[state=active]:text-white gap-2"
+                >
+                  <Layers size={16} />
+                  كورسات أنشأتها ({instructorCourses.length})
+                </TabsTrigger>
+                <TabsTrigger
+                  value="enrolled"
+                  className="rounded-xl px-6 py-3 font-black text-sm data-[state=active]:bg-primary data-[state=active]:text-white gap-2"
+                >
+                  <CheckCircle size={16} />
+                  كورسات اشتريتها ({myEnrolledCourses.length})
+                </TabsTrigger>
+                <TabsTrigger
+                  value="all"
+                  className="rounded-xl px-6 py-3 font-black text-sm data-[state=active]:bg-primary data-[state=active]:text-white gap-2"
+                >
+                  <BookOpen size={16} />
+                  جميع الكورسات ({publicCourses.length})
+                </TabsTrigger>
             </TabsList>
 
             {/* شريط البحث */}

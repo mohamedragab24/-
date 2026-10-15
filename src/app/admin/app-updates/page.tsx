@@ -4,7 +4,7 @@ import { useState } from "react";
 import { collection, orderBy, query } from "firebase/firestore";
 import { doc, updateDoc } from "firebase/firestore";
 import { Smartphone, UploadCloud, Loader2, Trash2, ShieldAlert, SkipForward, FileArchive, CheckCircle2, ImagePlus, BellRing } from "lucide-react";
-import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { uploadImageWithProgress } from "@/lib/upload-with-progress";
 import { useFirestore, useFirebase, useCollection, useMemoFirebase } from "@/firebase";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { Button } from "@/components/ui/button";
@@ -56,7 +56,7 @@ export default function AdminAppUpdatesPage() {
   const { toast } = useToast();
   const firestore = useFirestore();
   const { storage } = useFirebase();
-  const [imgBusy, setImgBusy] = useState(false);
+  const [imgProgress, setImgProgress] = useState<number | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [files, setFiles] = useState<Partial<Record<Abi, File>>>({});
   const [progress, setProgress] = useState(0);
@@ -69,15 +69,11 @@ export default function AdminAppUpdatesPage() {
 
   const uploadImage = async (f: File) => {
     if (!storage) return toast({ variant: "destructive", title: "خدمة التخزين غير متاحة" });
-    setImgBusy(true);
     try {
-      const safe = f.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const r = storageRef(storage, `notifications/updates/${Date.now()}_${safe}`);
-      await uploadBytes(r, f, { contentType: f.type || "image/jpeg" });
-      const url = await getDownloadURL(r);
+      const url = await uploadImageWithProgress(storage, "notifications/updates", f, setImgProgress);
       setForm((v) => ({ ...v, imageUrl: url }));
     } catch (e: any) { toast({ variant: "destructive", title: "فشل رفع الصورة", description: e?.message }); }
-    finally { setImgBusy(false); }
+    finally { setImgProgress(null); }
   };
 
   const publish = async () => {
@@ -152,7 +148,6 @@ export default function AdminAppUpdatesPage() {
 
           <div className="space-y-3">
             <Label>ملفات التطبيق (APK) — ملف لكل معمارية</Label>
-            <p className="text-xs text-muted-foreground">ابنِ بالأمر <span dir="ltr" className="font-mono">flutter build apk --release --split-per-abi</span> وارفع الملفين. كل جهاز يحمّل النسخة المناسبة له فقط (حجم أصغر بكثير).</p>
             <div className="grid gap-3">
               {SLOTS.map((sl) => {
                 const f = files[sl.abi];
@@ -177,6 +172,24 @@ export default function AdminAppUpdatesPage() {
             )}
           </div>
 
+          <div className="rounded-2xl border p-4 space-y-3">
+            <Label>صورة التحديث (تظهر في صفحة التحديث داخل التطبيق وفي الإشعار)</Label>
+            <div className="flex items-center gap-3">
+              <label className="inline-flex items-center gap-2 rounded-xl border px-4 py-3 font-bold cursor-pointer hover:bg-zinc-50">
+                <ImagePlus className="w-5 h-5" /> رفع صورة
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadImage(f); e.target.value = ""; }} />
+              </label>
+              {form.imageUrl && imgProgress === null && <Button variant="ghost" size="sm" className="text-red-600" onClick={() => setForm({ ...form, imageUrl: "" })}>إزالة الصورة</Button>}
+            </div>
+            {imgProgress !== null && (
+              <div className="space-y-1 max-w-sm">
+                <div className="h-3 rounded-full bg-secondary overflow-hidden"><div className="h-full bg-primary transition-all" style={{ width: `${imgProgress}%` }} /></div>
+                <p className="text-xs font-bold text-muted-foreground">جارٍ رفع الصورة {imgProgress}%</p>
+              </div>
+            )}
+            {form.imageUrl && <img src={form.imageUrl} alt="" className="h-32 w-56 object-cover rounded-xl border" />}
+          </div>
+
           <div className="rounded-2xl border p-4 space-y-4">
             <label className="flex items-center justify-between gap-3 font-black">
               <span className="flex items-center gap-2"><BellRing size={18} className="text-primary" /> إرسال إشعار للمستخدمين في شريط الهاتف</span>
@@ -184,15 +197,7 @@ export default function AdminAppUpdatesPage() {
             </label>
             {form.notify && (
               <div className="space-y-3">
-                <p className="text-xs text-muted-foreground">يصل لكل المستخدمين بعنوان التحديث ووصفه، مع الصورة التي ترفعها هنا (اختيارية).</p>
-                <div className="flex items-center gap-3">
-                  <label className="inline-flex items-center gap-2 rounded-xl border px-4 py-3 font-bold cursor-pointer hover:bg-zinc-50">
-                    <ImagePlus className="w-5 h-5" /> رفع صورة الإشعار
-                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadImage(f); }} />
-                  </label>
-                  {imgBusy && <Loader2 className="animate-spin" />}
-                  {form.imageUrl && <Button variant="ghost" size="sm" className="text-red-600" onClick={() => setForm({ ...form, imageUrl: "" })}>إزالة الصورة</Button>}
-                </div>
+                <p className="text-xs text-muted-foreground">يصل لكل المستخدمين بعنوان التحديث ووصفه، مع صورة التحديث (اختيارية).</p>
                 {/* معاينة شكل الإشعار */}
                 <div className="rounded-2xl bg-zinc-100 p-3 max-w-sm">
                   <div className="rounded-xl bg-white shadow p-3 space-y-2">
@@ -217,7 +222,7 @@ export default function AdminAppUpdatesPage() {
             </button>
           </div>
 
-          <Button disabled={busy} onClick={publish} className="h-16 w-full rounded-2xl font-black text-xl">
+          <Button disabled={busy || imgProgress !== null} onClick={publish} className="h-16 w-full rounded-2xl font-black text-xl">
             {busy ? <Loader2 className="animate-spin ml-2" /> : <UploadCloud className="ml-2" />} رفع ونشر التحديث{form.notify ? " وإرسال الإشعار" : ""}
           </Button>
         </CardContent>

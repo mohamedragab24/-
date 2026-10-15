@@ -17,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Video, FileText, ClipboardList, Radio, Users, Loader2, Trash2, Upload, Snowflake, Smartphone, ShieldCheck, Plus, UserMinus, Send, AlertTriangle, ArrowRight } from "lucide-react";
+import { Video, FileText, ClipboardList, Radio, Users, Loader2, Trash2, Upload, Snowflake, Smartphone, ShieldCheck, Plus, UserMinus, Send, AlertTriangle, ArrowRight, UserPlus, ShieldPlus, Pencil } from "lucide-react";
 import { callGroupFn, fnErrorMessage, formatBytes, estimateWeeklyFee, uploadGroupFile, GROUP_MIN_PREPAID } from "@/lib/groups";
 
 const AppOnlyNotice = ({ what }: { what: string }) => (
@@ -42,6 +42,13 @@ export default function GroupDetailPage() {
   const owner = !!user && g?.ownerUid === user.uid;
   const active = g?.status === "active";
 
+  // «محرر»: طالب عيّنه صاحب المجموعة وحدّد صلاحياته. تُطبَّق الصلاحيات فعليًا على الخادم (Cloud Functions) وقواعد الأمان، والواجهة تعكسها فقط.
+  const myMemberRef = useMemoFirebase(() => (firestore && user && g && !owner ? doc(firestore, "groups", id, "members", user.uid) : null), [firestore, user, id, !!g, owner]);
+  const { data: myMember } = useDoc<any>(myMemberRef);
+  const perms: Record<string, boolean> = (myMember?.role === "editor" && myMember?.permissions) || {};
+  const can = (p: "uploadVideos" | "uploadFiles" | "createQuizzes" | "manageSessions" | "addStudents") => owner || perms[p] === true;
+  const canSeeMembers = can("addStudents");
+
   useEffect(() => { if (!isUserLoading && !user) router.push("/login"); }, [user, isUserLoading, router]);
 
   const col = (name: string) => (firestore && user && g && active ? query(collection(firestore, "groups", id, name), orderBy("order", "desc")) : null);
@@ -50,7 +57,7 @@ export default function GroupDetailPage() {
   const quizzesQ = useMemoFirebase(() => col("quizzes"), [firestore, user, id, active, !!g]);
   const recQ = useMemoFirebase(() => col("recordings"), [firestore, user, id, active, !!g]);
   const sessQ = useMemoFirebase(() => (firestore && user && g && active ? query(collection(firestore, "groups", id, "sessions"), where("status", "==", "live")) : null), [firestore, user, id, active, !!g]);
-  const membersQ = useMemoFirebase(() => (firestore && owner ? collection(firestore, "groups", id, "members") : null), [firestore, owner, id]);
+  const membersQ = useMemoFirebase(() => (firestore && canSeeMembers && active ? collection(firestore, "groups", id, "members") : null), [firestore, canSeeMembers, active, id]);
   const invitesQ = useMemoFirebase(() => (firestore && owner && user ? query(collection(firestore, "groupInvites"), where("groupId", "==", id), where("ownerUid", "==", user.uid)) : null), [firestore, owner, user, id]);
   const { data: videos } = useCollection<any>(videosQ);
   const { data: files } = useCollection<any>(filesQ);
@@ -72,6 +79,8 @@ export default function GroupDetailPage() {
   const [quizOpen, setQuizOpen] = useState(false);
   const [quizTitle, setQuizTitle] = useState("");
   const [questions, setQuestions] = useState<QDraft[]>([newQuestion()]);
+  const [editorTarget, setEditorTarget] = useState<any | null>(null);
+  const [editorPerms, setEditorPerms] = useState<Record<string, boolean>>({});
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
   const [password, setPassword] = useState("");
@@ -113,12 +122,21 @@ export default function GroupDetailPage() {
     run(`rm-${uid}`, async () => { await callGroupFn("removeGroupMember", { groupId: id, uid }); }, "تم حذف الطالب");
   };
 
+  const openEditorDialog = (m: any) => {
+    setEditorTarget(m);
+    setEditorPerms({ uploadVideos: false, uploadFiles: false, createQuizzes: false, manageSessions: false, addStudents: false, ...(m.role === "editor" ? m.permissions || {} : {}) });
+  };
+  const saveEditor = (editor: boolean) => run("editor", async () => {
+    await callGroupFn("setGroupEditor", { groupId: id, uid: editorTarget.id, editor, permissions: editorPerms });
+    setEditorTarget(null);
+  }, editor ? "تم حفظ صلاحيات المحرر" : "تم إلغاء صفة المحرر");
+
   const startSession = () => run("session", async () => {
     await callGroupFn("startGroupSession", { groupId: id, record, title: sessionTitle });
     setSessionOpen(false); setSessionTitle(""); setRecord(false);
   }, "بدأت الجلسة وتم إشعار الطلاب");
 
-  const endSession = (sid: string) => run(`end-${sid}`, async () => { await callGroupFn("endGroupSession", { groupId: id, sessionId: sid }); }, "تم إنهاء الجلسة");
+  const endSession = (sid: string) => run(`end-${sid}`, async () => { await callGroupFn("endGroupSession", { groupId: id, sessionId: sid }); }, "تم إنهاء الجلسة وحذفها من المجموعة لدى الجميع");
 
   const saveQuiz = () => run("quiz", async () => {
     await callGroupFn("createGroupQuiz", {
@@ -165,6 +183,7 @@ export default function GroupDetailPage() {
           <Badge variant="outline" className="font-black">{g.memberCount || 0} طالب</Badge>
           <Badge variant="outline" className="font-black">{formatBytes(g.storageBytes || 0)}</Badge>
           {!owner && g.ownerName && <Badge variant="outline" className="font-black">المُفهم: {g.ownerName}</Badge>}
+          {myMember?.role === "editor" && <Badge className="font-black bg-primary/10 text-primary hover:bg-primary/10">أنت محرر في هذه المجموعة</Badge>}
         </div>
       </div>
 
@@ -188,7 +207,7 @@ export default function GroupDetailPage() {
         <div className="bg-emerald-50 border-2 border-emerald-200 rounded-3xl p-5 text-right space-y-2">
           {liveSessions!.map((s: any) => (
             <div key={s.id} className="flex items-center justify-between gap-3">
-              {owner ? <Button size="sm" variant="outline" className="rounded-xl font-black" disabled={busy === `end-${s.id}`} onClick={() => endSession(s.id)}>إنهاء الجلسة</Button> : <span />}
+              {can("manageSessions") ? <Button size="sm" variant="outline" className="rounded-xl font-black" disabled={busy === `end-${s.id}`} onClick={() => endSession(s.id)}>إنهاء الجلسة</Button> : <span />}
               <div className="flex items-center gap-3 flex-wrap justify-end">
                 <a href={`fahmny://group/${id}/session/${s.id}`} className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm rounded-xl px-4 h-10"><Smartphone size={16} /> دخول الاجتماع في التطبيق</a>
                 <p className="font-black text-emerald-800 flex items-center gap-2"><Radio className="animate-pulse" size={18} /> جلسة مباشرة الآن: {s.title}</p>
@@ -204,36 +223,37 @@ export default function GroupDetailPage() {
             <TabsTrigger value="videos" className="font-black gap-1"><Video size={14} /> الفيديوهات</TabsTrigger>
             <TabsTrigger value="files" className="font-black gap-1"><FileText size={14} /> ملفات PDF</TabsTrigger>
             <TabsTrigger value="quizzes" className="font-black gap-1"><ClipboardList size={14} /> الاختبارات</TabsTrigger>
-            <TabsTrigger value="recordings" className="font-black gap-1"><Radio size={14} /> الجلسات المسجلة</TabsTrigger>
-            {owner && <TabsTrigger value="members" className="font-black gap-1"><Users size={14} /> الطلاب</TabsTrigger>}
+            <TabsTrigger value="recordings" className="font-black gap-1"><Radio size={14} /> الجلسات</TabsTrigger>
+            {canSeeMembers && <TabsTrigger value="add-student" className="font-black gap-1"><UserPlus size={14} /> إضافة طالب</TabsTrigger>}
+            {canSeeMembers && <TabsTrigger value="members" className="font-black gap-1"><Users size={14} /> الطلاب</TabsTrigger>}
           </TabsList>
 
           {/* الفيديوهات */}
           <TabsContent value="videos" className="space-y-4 mt-4">
             <AppOnlyNotice what="الفيديوهات" />
-            {owner ? (
-              <UploadBox label="رفع فيديو" accept="video/*" title={uploadTitle} setTitle={setUploadTitle} inputRef={videoInput} busy={busy === "upload-videos"} progress={progress} onPick={(f) => upload("videos", f)} />
+            {can("uploadVideos") ? (
+              <UploadBox label="رفع فيديو جديد" accept="video/*" title={uploadTitle} setTitle={setUploadTitle} inputRef={videoInput} busy={busy === "upload-videos"} progress={progress} onPick={(f) => upload("videos", f)} />
             ) : <p className="font-black text-zinc-600 text-right">عدد الفيديوهات: {videos?.length || 0}</p>}
-            {owner && <ContentList items={videos} kind="videos" icon={<Video size={16} />} busy={busy} onDelete={removeContent} />}
+            {can("uploadVideos") && <ContentList items={videos} kind="videos" icon={<Video size={16} />} busy={busy} onDelete={owner ? removeContent : undefined} />}
           </TabsContent>
 
           {/* الملفات */}
           <TabsContent value="files" className="space-y-4 mt-4">
             <AppOnlyNotice what="ملفات PDF" />
-            {owner ? (
-              <UploadBox label="رفع ملف PDF" accept="application/pdf" title={uploadTitle} setTitle={setUploadTitle} inputRef={fileInput} busy={busy === "upload-files"} progress={progress} onPick={(f) => upload("files", f)} />
+            {can("uploadFiles") ? (
+              <UploadBox label="رفع PDF جديد" accept="application/pdf" title={uploadTitle} setTitle={setUploadTitle} inputRef={fileInput} busy={busy === "upload-files"} progress={progress} onPick={(f) => upload("files", f)} />
             ) : <p className="font-black text-zinc-600 text-right">عدد الملفات: {files?.length || 0}</p>}
-            {owner && <ContentList items={files} kind="files" icon={<FileText size={16} />} busy={busy} onDelete={removeContent} />}
+            {can("uploadFiles") && <ContentList items={files} kind="files" icon={<FileText size={16} />} busy={busy} onDelete={owner ? removeContent : undefined} />}
           </TabsContent>
 
           {/* الاختبارات */}
           <TabsContent value="quizzes" className="space-y-4 mt-4">
             <AppOnlyNotice what="الاختبارات" />
-            {owner ? (
+            {can("createQuizzes") ? (
               <>
-                <Button onClick={() => setQuizOpen(true)} className="rounded-xl font-black gap-2"><Plus size={16} /> اختبار جديد</Button>
+                <Button onClick={() => setQuizOpen(true)} className="rounded-xl font-black gap-2"><Plus size={16} /> إنشاء اختبار جديد</Button>
                 <p className="text-xs font-bold text-zinc-500">الأسئلة الاختيارية تُصحَّح تلقائيًا، والمقالية تظهر لك في التطبيق لمراجعتها وتصحيحها.</p>
-                <ContentList items={quizzes} kind="quizzes" icon={<ClipboardList size={16} />} busy={busy} onDelete={removeContent} extra={(q: any) => `${q.questionCount} سؤال${q.hasEssay ? " (به مقالي)" : ""}`} />
+                <ContentList items={quizzes} kind="quizzes" icon={<ClipboardList size={16} />} busy={busy} onDelete={owner ? removeContent : undefined} extra={(q: any) => `${q.questionCount} سؤال${q.hasEssay ? " (به مقالي)" : ""}`} />
               </>
             ) : <p className="font-black text-zinc-600 text-right">عدد الاختبارات: {quizzes?.length || 0}</p>}
           </TabsContent>
@@ -241,33 +261,26 @@ export default function GroupDetailPage() {
           {/* الجلسات */}
           <TabsContent value="recordings" className="space-y-4 mt-4">
             <AppOnlyNotice what="الجلسات المباشرة وتسجيلاتها" />
-            {owner && <Button onClick={() => setSessionOpen(true)} className="rounded-xl font-black gap-2"><Radio size={16} /> بدء جلسة جديدة</Button>}
-            {owner
-              ? <ContentList items={recordings} kind="recordings" icon={<Radio size={16} />} busy={busy} onDelete={removeContent} extra={(r: any) => (r.status === "processing" ? "جارٍ المعالجة" : formatBytes(r.size))} />
+            {can("manageSessions") && <Button onClick={() => setSessionOpen(true)} className="rounded-xl font-black gap-2"><Radio size={16} /> إنشاء جلسة</Button>}
+            <h3 className="font-black text-right">الجلسات المسجلة</h3>
+            {can("manageSessions")
+              ? <ContentList items={recordings} kind="recordings" icon={<Radio size={16} />} busy={busy} onDelete={owner ? removeContent : undefined} extra={(r: any) => (r.status === "processing" ? "جارٍ المعالجة" : formatBytes(r.size))} />
               : <p className="font-black text-zinc-600 text-right">عدد الجلسات المسجلة: {recordings?.length || 0}</p>}
           </TabsContent>
 
-          {/* الطلاب */}
-          {owner && (
-            <TabsContent value="members" className="space-y-5 mt-4">
+          {/* إضافة طالب: دعوة بالرقم التعريفي — لا يُضاف الطالب فعليًا إلا بعد قبوله الدعوة */}
+          {canSeeMembers && (
+            <TabsContent value="add-student" className="space-y-5 mt-4">
               <Card className="rounded-3xl border-2"><CardContent className="p-5 space-y-3 text-right">
-                <Label className="font-black">دعوة طالب بالرقم التعريفي</Label>
+                <Label className="font-black">إضافة طالب بالرقم التعريفي على منصة فهمني</Label>
                 <div className="flex gap-2">
-                  <Button onClick={sendInvite} disabled={busy === "invite" || inviteId.trim().length !== 8} className="rounded-xl font-black gap-2">{busy === "invite" ? <Loader2 className="animate-spin" /> : <Send size={16} />} إرسال</Button>
+                  <Button onClick={sendInvite} disabled={busy === "invite" || inviteId.trim().length !== 8} className="rounded-xl font-black gap-2">{busy === "invite" ? <Loader2 className="animate-spin" /> : <Send size={16} />} إرسال دعوة</Button>
                   <Input dir="ltr" value={inviteId} onChange={(e) => setInviteId(e.target.value.toLowerCase().replace(/[^0-9a-z]/g, "").slice(0, 8))} placeholder="مثال: k3f9a2xz" className="h-12 rounded-xl border-2 font-mono tracking-widest" />
                 </div>
-                <p className="text-xs font-bold text-zinc-500">الرقم التعريفي يظهر للطالب في صفحة «المجموعات». يمكنك إضافة أو حذف الطلاب في أي وقت.</p>
+                <p className="text-xs font-bold text-zinc-500">يصل للطالب إشعار بالدعوة، ولا يظهر في قائمة «الطلاب» إلا بعد قبولها.</p>
               </CardContent></Card>
 
-              <h3 className="font-black text-right">الأعضاء ({members?.length || 0})</h3>
-              {(members || []).map((m: any) => (
-                <Card key={m.id} className="rounded-2xl"><CardContent className="p-4 flex items-center justify-between">
-                  <Button size="sm" variant="outline" className="rounded-xl text-red-600 gap-1 font-black" disabled={busy === `rm-${m.id}`} onClick={() => removeMember(m.id, m.name)}><UserMinus size={14} /> حذف</Button>
-                  <div className="text-right"><p className="font-black">{m.name || "طالب"}</p><p className="text-xs text-zinc-500 font-mono" dir="ltr">{m.publicId}</p></div>
-                </CardContent></Card>
-              ))}
-
-              {(invites || []).filter((i: any) => i.status === "pending").length > 0 && (
+              {owner && (invites || []).filter((i: any) => i.status === "pending").length > 0 && (
                 <>
                   <h3 className="font-black text-right">دعوات بانتظار الرد</h3>
                   {(invites || []).filter((i: any) => i.status === "pending").map((i: any) => (
@@ -278,6 +291,28 @@ export default function GroupDetailPage() {
                   ))}
                 </>
               )}
+            </TabsContent>
+          )}
+
+          {/* الطلاب: من قبلوا الدعوة فقط، ويمكن لصاحب المجموعة تحويل أي طالب إلى محرر وتحديد صلاحياته */}
+          {canSeeMembers && (
+            <TabsContent value="members" className="space-y-4 mt-4">
+              <h3 className="font-black text-right">الطلاب ({members?.length || 0})</h3>
+              {!(members || []).length && <p className="text-sm text-zinc-500 font-bold text-right">لا يوجد طلاب بعد. أرسل دعوة من قسم «إضافة طالب».</p>}
+              {(members || []).map((m: any) => (
+                <Card key={m.id} className="rounded-2xl"><CardContent className="p-4 flex flex-wrap items-center justify-between gap-2">
+                  {owner ? (
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" className="rounded-xl gap-1 font-black" onClick={() => openEditorDialog(m)}>{m.role === "editor" ? <><Pencil size={14} /> تعديل الصلاحيات</> : <><ShieldPlus size={14} /> تحويل إلى محرر</>}</Button>
+                      <Button size="sm" variant="outline" className="rounded-xl text-red-600 gap-1 font-black" disabled={busy === `rm-${m.id}`} onClick={() => removeMember(m.id, m.name)}><UserMinus size={14} /> حذف</Button>
+                    </div>
+                  ) : <span />}
+                  <div className="text-right">
+                    <p className="font-black flex items-center gap-2 justify-end">{m.role === "editor" && <Badge className="bg-primary/10 text-primary hover:bg-primary/10 font-black">محرر</Badge>}{m.name || "طالب"}</p>
+                    <p className="text-xs text-zinc-500 font-mono" dir="ltr">{m.publicId}</p>
+                  </div>
+                </CardContent></Card>
+              ))}
             </TabsContent>
           )}
         </Tabs>
@@ -292,7 +327,7 @@ export default function GroupDetailPage() {
       {/* جلسة جديدة */}
       <Dialog open={sessionOpen} onOpenChange={setSessionOpen}>
         <DialogContent className="rounded-[2rem]" dir="rtl">
-          <DialogHeader><DialogTitle className="text-right text-2xl font-black">بدء جلسة جديدة</DialogTitle><DialogDescription className="text-right">سيصل إشعار لكل أعضاء المجموعة، وتفتح الجلسة من التطبيق فقط.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle className="text-right text-2xl font-black">إنشاء جلسة</DialogTitle><DialogDescription className="text-right">سيصل إشعار لكل أعضاء المجموعة، وتفتح الجلسة من التطبيق فقط.</DialogDescription></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2"><Label className="font-black">عنوان الجلسة (اختياري)</Label><Input value={sessionTitle} onChange={(e) => setSessionTitle(e.target.value)} className="h-12 rounded-xl border-2" /></div>
             <label className="flex items-center gap-3 bg-zinc-50 rounded-2xl p-4 cursor-pointer">
@@ -302,7 +337,7 @@ export default function GroupDetailPage() {
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setSessionOpen(false)} className="rounded-xl font-black">إلغاء</Button>
-            <Button onClick={startSession} disabled={busy === "session"} className="rounded-xl font-black">{busy === "session" ? <Loader2 className="animate-spin" /> : "ابدأ الآن"}</Button>
+            <Button onClick={startSession} disabled={busy === "session"} className="rounded-xl font-black">{busy === "session" ? <Loader2 className="animate-spin" /> : "إنشاء وبدء الجلسة"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -338,6 +373,28 @@ export default function GroupDetailPage() {
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setQuizOpen(false)} className="rounded-xl font-black">إلغاء</Button>
             <Button onClick={saveQuiz} disabled={busy === "quiz" || !quizTitle.trim()} className="rounded-xl font-black">{busy === "quiz" ? <Loader2 className="animate-spin" /> : "حفظ الاختبار"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* صلاحيات المحرر */}
+      <Dialog open={!!editorTarget} onOpenChange={(o) => !o && setEditorTarget(null)}>
+        <DialogContent className="rounded-[2rem]" dir="rtl">
+          <DialogHeader><DialogTitle className="text-right text-2xl font-black">صلاحيات المحرر</DialogTitle><DialogDescription className="text-right">{editorTarget?.name || "الطالب"} — اختر ما يستطيع تنفيذه داخل المجموعة. تُطبَّق الصلاحيات على الخادم، ويبقى صاحب المجموعة وحده المسؤول عن الحذف وإدارة المحررين.</DialogDescription></DialogHeader>
+          <div className="space-y-2">
+            {([["uploadVideos", "رفع الفيديوهات"], ["uploadFiles", "رفع ملفات PDF"], ["createQuizzes", "إنشاء الاختبارات"], ["manageSessions", "إنشاء الجلسات وإنهاؤها"], ["addStudents", "إضافة الطلاب (إرسال الدعوات)"]] as const).map(([k, label]) => (
+              <label key={k} className="flex items-center gap-3 bg-zinc-50 rounded-2xl p-3 cursor-pointer">
+                <Checkbox checked={editorPerms[k] === true} onCheckedChange={(v) => setEditorPerms({ ...editorPerms, [k]: v === true })} />
+                <span className="font-black text-sm">{label}</span>
+              </label>
+            ))}
+          </div>
+          <DialogFooter className="gap-2 sm:justify-between">
+            {editorTarget?.role === "editor" ? <Button variant="outline" onClick={() => saveEditor(false)} disabled={busy === "editor"} className="rounded-xl font-black text-red-600 border-red-200">إلغاء صفة المحرر</Button> : <span />}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setEditorTarget(null)} className="rounded-xl font-black">إغلاق</Button>
+              <Button onClick={() => saveEditor(true)} disabled={busy === "editor"} className="rounded-xl font-black">{busy === "editor" ? <Loader2 className="animate-spin" /> : "حفظ"}</Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -385,7 +442,7 @@ function ContentList({ items, kind, icon, busy, onDelete, extra }: any) {
     <div className="space-y-2">
       {items.map((it: any) => (
         <div key={it.id} className="flex items-center justify-between bg-white border rounded-2xl p-3">
-          <Button size="icon" variant="ghost" className="text-red-500" disabled={busy === `del-${it.id}`} onClick={() => onDelete(kind, it.id)}><Trash2 size={16} /></Button>
+          {onDelete ? <Button size="icon" variant="ghost" className="text-red-500" disabled={busy === `del-${it.id}`} onClick={() => onDelete(kind, it.id)}><Trash2 size={16} /></Button> : <span />}
           <div className="flex items-center gap-2 text-right">
             <div><p className="font-black text-sm">{it.title}</p><p className="text-xs text-zinc-500 font-bold">{extra ? extra(it) : formatBytes(it.size)}</p></div>
             <span className="text-primary">{icon}</span>

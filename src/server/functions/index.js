@@ -420,7 +420,8 @@ exports.checkCourseAccess = onCall({ secrets: R2_SECRETS }, async (request) => {
 /** Returns purchased course IDs; falls back to the R2 entitlement index. */
 exports.getMyPurchasedCourseIds = onCall({ secrets: R2_SECRETS }, async (request) => {
   const uid = request.auth?.uid;
-  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  // بعد تسجيل الخروج (أو قبل جاهزية الجلسة) لا نرمي خطأ: نرجّع قائمة فارغة بهدوء
+  if (!uid) return { courseIds: [], source: 'anonymous' };
   try {
     const snap = await db.collection('purchases').where('uid', '==', uid).where('status', '==', 'completed').get();
     const ids = snap.docs.map(d => String(d.data()?.courseId || '')).filter(Boolean);
@@ -632,10 +633,12 @@ exports.scheduleNotification = onCall(async (request) => {
   if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
   const me = await db.collection('users').doc(uid).get();
   if (!(request.auth.token?.admin === true || me.data()?.isAdmin === true || me.data()?.role === 'admin')) throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
-  const { title, body, imageUrl, campaign, description, sendAt, audience } = request.data || {};
+  const { title, imageUrl, campaign, description, sendAt, audience } = request.data || {};
+  // الرسالة = الوصف (لا يوجد حقل رسالة منفصل ولا اسم حملة)
+  const body = String(request.data?.body || description || '').trim();
   const deliveryMode = String(request.data?.deliveryMode || 'both');
   if (!['both', 'in_app', 'push'].includes(deliveryMode)) throw new HttpsError('invalid-argument', 'قناة الإرسال غير صحيحة');
-  if (!title || !body) throw new HttpsError('invalid-argument', 'العنوان والرسالة مطلوبان');
+  if (!title || !body) throw new HttpsError('invalid-argument', 'العنوان والوصف مطلوبان');
   if (!String(sendAt || '').trim()) {
     // بدون موعد = إرسال فوري لكل المستخدمين (الجدولة التلقائية لا تعمل على Vercel بدون cron)
     const { pushToAll, inAppToAll } = require('./push');
@@ -656,6 +659,70 @@ exports.scheduleNotification = onCall(async (request) => {
   if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) throw new HttpsError('invalid-argument', 'بيانات الإشعار أو الموعد غير صحيحة');
   const ref = await db.collection('scheduledNotifications').add({ title: String(title), body: String(body), imageUrl: String(imageUrl || ''), campaign: String(campaign || ''), description: String(description || ''), audience: String(audience || 'all'), sendAt: admin.firestore.Timestamp.fromDate(date), status: 'pending', deliveryMode, createdBy: uid, createdAt: admin.firestore.FieldValue.serverTimestamp() });
   return { id: ref.id };
+});
+
+async function requireNotifAdmin(request) {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول أولاً');
+  const me = await db.collection('users').doc(uid).get();
+  if (!(request.auth.token?.admin === true || me.data()?.isAdmin === true || me.data()?.role === 'admin')) throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
+  return uid;
+}
+
+/** تعديل إشعار (مجدول أو مُرسل): يحدّث السجل ونسخ «داخل التطبيق» عند المستخدمين. إشعار Push الذي وصل للهاتف لا يمكن سحبه. */
+exports.updateNotification = onCall(async (request) => {
+  await requireNotifAdmin(request);
+  const id = String(request.data?.id || '').trim();
+  if (!id) throw new HttpsError('invalid-argument', 'معرف الإشعار مطلوب');
+  const ref = db.collection('scheduledNotifications').doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'الإشعار غير موجود');
+  const cur = snap.data() || {};
+  const title = String(request.data?.title ?? cur.title ?? '').trim().slice(0, 150);
+  const description = String(request.data?.description ?? cur.description ?? '').trim().slice(0, 3000);
+  const imageUrl = String(request.data?.imageUrl ?? cur.imageUrl ?? '').trim().slice(0, 1000);
+  if (!title || !description) throw new HttpsError('invalid-argument', 'العنوان والوصف مطلوبان');
+  const patch = { title, body: description, description, imageUrl, editedAt: admin.firestore.FieldValue.serverTimestamp() };
+  if (cur.status === 'pending' && String(request.data?.sendAt || '').trim()) {
+    const date = new Date(String(request.data.sendAt));
+    if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) throw new HttpsError('invalid-argument', 'الموعد غير صحيح');
+    patch.sendAt = admin.firestore.Timestamp.fromDate(date);
+  }
+  await ref.update(patch);
+  if (cur.status !== 'pending' && cur.deliveryMode !== 'push') {
+    const users = await db.collection('users').select().get();
+    for (let s = 0; s < users.docs.length; s += 200) {
+      const batch = db.batch();
+      for (const u of users.docs.slice(s, s + 200)) {
+        const data = { title, body: description, description, imageUrl };
+        batch.set(u.ref.collection('notifications').doc(id), data, { merge: true });
+        batch.set(db.collection('notifications').doc(`${u.id}_${id}`), data, { merge: true });
+      }
+      await batch.commit();
+    }
+  }
+  return { ok: true };
+});
+
+/** حذف إشعار: يحذف السجل ونسخه داخل التطبيق عند كل المستخدمين (وإن كان مجدولًا لن يُرسل). */
+exports.deleteNotification = onCall(async (request) => {
+  await requireNotifAdmin(request);
+  const id = String(request.data?.id || '').trim();
+  if (!id) throw new HttpsError('invalid-argument', 'معرف الإشعار مطلوب');
+  const ref = db.collection('scheduledNotifications').doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'الإشعار غير موجود');
+  const users = await db.collection('users').select().get();
+  for (let s = 0; s < users.docs.length; s += 200) {
+    const batch = db.batch();
+    for (const u of users.docs.slice(s, s + 200)) {
+      batch.delete(u.ref.collection('notifications').doc(id));
+      batch.delete(db.collection('notifications').doc(`${u.id}_${id}`));
+    }
+    await batch.commit();
+  }
+  await ref.delete();
+  return { ok: true };
 });
 
 /** When a paid session gets a scheduled time, queue reminders for both participants. */
