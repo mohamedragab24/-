@@ -251,7 +251,7 @@ export default function CourseDetailPage() {
         {course.instructorId && (
           <Card className="rounded-3xl border-2 border-primary/10 shadow-sm">
             <CardContent className="p-6 flex flex-col md:flex-row items-center gap-5">
-              <Avatar className="h-20 w-20 border-4 border-white shadow-lg"><AvatarImage src={instructorProfile?.profilePictureUrl || ""}/><AvatarFallback>{course.instructorName?.charAt(0)}</AvatarFallback></Avatar>
+              <Avatar className="h-20 w-20 border-4 border-white shadow-lg"><AvatarImage src={instructorProfile??.profilePictureUrl || (instructorProfile??.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")}/><AvatarFallback>{course.instructorName?.charAt(0)}</AvatarFallback></Avatar>
               <div className="flex-1 text-center md:text-right">
                 <div className="flex items-center justify-center md:justify-start gap-2"><h3 className="text-xl font-black">{course.instructorName}</h3><Star className="w-4 h-4 fill-yellow-400 text-yellow-400"/></div>
                 <p className="text-sm text-zinc-500 font-bold mt-1">{instructorProfile?.bio || "مُفهّم ناشر الكورس"}</p>

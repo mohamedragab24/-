@@ -175,8 +175,8 @@ function FilterPill({ label, active, onClick }: any) {
 
 function IstifhamCard({ req, allUsers, router }: any) {
   const requester = allUsers?.find((u: any) => u.id === req.mustafhemId);
-  const defaultMaleAvatar = "https://picsum.photos/seed/male/200/200";
-  const defaultFemaleAvatar = "https://picsum.photos/seed/female/200/200";
+  const defaultMaleAvatar = "/avatars/avatar_male.jpg";
+  const defaultFemaleAvatar = "/avatars/avatar_female.jpg";
   const avatar = requester?.profilePictureUrl || (requester?.gender === 'female' ? defaultFemaleAvatar : defaultMaleAvatar);
 
   return (

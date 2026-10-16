@@ -172,7 +172,7 @@ export default function AdminRoles() {
                     </div>
                   </div>
                   <Avatar className="h-20 w-20 border-4 border-white shadow-md">
-                    <AvatarImage src={targetUser.profilePictureUrl} />
+                    <AvatarImage src={targetUser?.profilePictureUrl || (targetUser?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                     <AvatarFallback className="text-xl font-black">{targetUser.fullName?.charAt(0)}</AvatarFallback>
                   </Avatar>
                 </div>
@@ -240,7 +240,7 @@ export default function AdminRoles() {
                           <p className="text-[10px] text-muted-foreground">{admin.email}</p>
                         </div>
                         <Avatar className="h-10 w-10 border shadow-sm">
-                          <AvatarImage src={admin.profilePictureUrl} />
+                          <AvatarImage src={admin?.profilePictureUrl || (admin?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                           <AvatarFallback>{admin.fullName?.charAt(0)}</AvatarFallback>
                         </Avatar>
                       </div>

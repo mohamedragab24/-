@@ -199,8 +199,8 @@ function LoginContent() {
           birthDate: new Date(birthDate).toISOString(),
           status: "active",
           createdAt: new Date().toISOString(),
-          needsProfileCompletion: true,
-          password: password 
+          needsProfileCompletion: true
+          // لا تُخزَّن كلمة المرور في Firestore أبدًا (تُدار عبر Firebase Auth فقط)
         });
 
         toast({ title: "تم إنشاء الحساب بنجاح!" });

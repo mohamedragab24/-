@@ -170,7 +170,7 @@ export default function AdminAccountManagement() {
                   </Badge>
                 </div>
                 <Avatar className="h-24 w-24 border-4 border-white shadow-xl">
-                  <AvatarImage src={targetUser.profilePictureUrl} />
+                  <AvatarImage src={targetUser?.profilePictureUrl || (targetUser?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                   <AvatarFallback className="text-3xl font-black">{targetUser.fullName?.charAt(0)}</AvatarFallback>
                 </Avatar>
               </div>

@@ -132,7 +132,7 @@ export default function TeachersPage() {
           <Card key={teacher.id} className="rounded-xl overflow-hidden shadow-sm border-none flex flex-col items-center p-6 bg-white text-center hover:shadow-md transition-shadow">
             <div className="relative mb-4">
               <Avatar className="h-24 w-24 border-2 border-zinc-50 shadow-sm">
-                <AvatarImage src={teacher.profilePictureUrl} />
+                <AvatarImage src={teacher?.profilePictureUrl || (teacher?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                 <AvatarFallback className="text-2xl font-black bg-zinc-100 text-zinc-400">{teacher.fullName?.charAt(0)}</AvatarFallback>
               </Avatar>
             </div>
@@ -179,7 +179,7 @@ export default function TeachersPage() {
             <div className="p-8 space-y-8">
               <div className="flex items-center gap-6 p-6 bg-zinc-50 rounded-3xl">
                 <Avatar className="h-28 w-28 border-4 border-white shadow-md">
-                  <AvatarImage src={selectedTeacher?.profilePictureUrl} />
+                  <AvatarImage src={selectedTeacher??.profilePictureUrl || (selectedTeacher??.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                   <AvatarFallback className="text-4xl">{selectedTeacher?.fullName?.charAt(0)}</AvatarFallback>
                 </Avatar>
                 <div className="text-right flex-1">

@@ -112,7 +112,7 @@ export default function AdminVerification() {
           <Card key={u.id} className="shadow-xl rounded-[3rem] overflow-hidden border-2 bg-white hover:border-primary/20 transition-all">
             <CardHeader className="bg-muted/30 p-8 flex flex-col items-center gap-4 text-center">
               <Avatar className="h-24 w-24 border-4 border-white shadow-xl">
-                <AvatarImage src={u.profilePictureUrl} />
+                <AvatarImage src={u?.profilePictureUrl || (u?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                 <AvatarFallback className="text-3xl font-black">{u.fullName?.charAt(0)}</AvatarFallback>
               </Avatar>
               <div>

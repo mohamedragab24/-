@@ -85,6 +85,7 @@ export default function AdminApprovals() {
       isProfileApproved: true, 
       profilePicturePending: false,
       pendingProfilePictureUrl: null,
+      profilePictureRejectReason: null,
       status: 'active' 
     });
     
@@ -103,18 +104,25 @@ export default function AdminApprovals() {
 
   const handleRejectProfile = (u: any) => {
     if (!firestore) return;
+    // سبب الرفض إلزامي ويصل للمستخدم
+    const reason = (typeof window !== "undefined" ? window.prompt("اكتب سبب رفض الصورة (سيظهر للمستخدم):") : "")?.trim();
+    if (!reason) {
+      toast({ variant: "destructive", title: "سبب الرفض مطلوب", description: "اكتب سبب الرفض لإبلاغ المستخدم." });
+      return;
+    }
     const uRef = doc(firestore, "users", u.id);
-    
-    // حذف الصورة المنتظرة دون المساس بالرسمية (إذا كانت موجودة)
-    updateDocumentNonBlocking(uRef, { 
+
+    // حذف الصورة المنتظرة دون المساس بالرسمية؛ تبقى الصورة الافتراضية/الحالية
+    updateDocumentNonBlocking(uRef, {
       profilePicturePending: false,
-      pendingProfilePictureUrl: null 
+      pendingProfilePictureUrl: null,
+      profilePictureRejectReason: reason
     });
-    
+
     addDocumentNonBlocking(collection(firestore, "notifications"), {
       userId: u.id,
       title: "تم رفض الصورة الشخصية",
-      message: "عذراً، الصورة الشخصية المرفوعة لا تستوفي المعايير. يرجى رفع صورة بديلة واضحة.",
+      message: `تم رفض صورتك الشخصية. السبب: ${reason}. ستبقى الصورة الافتراضية حتى ترفع صورة مطابقة للشروط.`,
       type: "rejection",
       read: false,
       createdAt: new Date().toISOString()
@@ -299,7 +307,7 @@ export default function AdminApprovals() {
                   <CardHeader className="bg-accent/5 p-8 flex flex-col items-center gap-4 text-center">
                     <div className="relative">
                       <Avatar className="h-24 w-24 border-4 border-white shadow-xl">
-                        <AvatarImage src={v.profilePictureUrl} />
+                        <AvatarImage src={v?.profilePictureUrl || (v?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                         <AvatarFallback className="text-3xl font-black">{v.fullName?.charAt(0)}</AvatarFallback>
                       </Avatar>
                       <div className="absolute -bottom-1 -right-1 bg-white p-1.5 rounded-full shadow-md text-accent">

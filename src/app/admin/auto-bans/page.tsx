@@ -85,7 +85,7 @@ export default function AdminAutoBans() {
                 <TableCell className="px-8">
                   <div className="flex items-center gap-4">
                     <Avatar className="h-12 w-12 border-2 border-red-200">
-                      <AvatarImage src={u.profilePictureUrl} />
+                      <AvatarImage src={u?.profilePictureUrl || (u?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                       <AvatarFallback>{u.fullName?.charAt(0)}</AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col">
@@ -132,7 +132,7 @@ export default function AdminAutoBans() {
             <div className="py-6 space-y-6">
               <div className="flex items-center gap-6 p-6 bg-red-50 rounded-3xl">
                 <Avatar className="h-20 w-20 border-4 border-white shadow-lg">
-                  <AvatarImage src={selectedUser.profilePictureUrl} />
+                  <AvatarImage src={selectedUser?.profilePictureUrl || (selectedUser?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                   <AvatarFallback>{selectedUser.fullName?.charAt(0)}</AvatarFallback>
                 </Avatar>
                 <div className="flex-1">

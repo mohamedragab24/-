@@ -210,7 +210,7 @@ export default function AdminFinance() {
                 <div className="p-6 bg-zinc-50 rounded-2xl border-2 border-dashed space-y-6 animate-in fade-in">
                   <div className="flex items-center gap-4">
                     <Avatar className="h-16 w-16">
-                      <AvatarImage src={targetUser.profilePictureUrl} />
+                      <AvatarImage src={targetUser?.profilePictureUrl || (targetUser?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                       <AvatarFallback>{targetUser.fullName?.charAt(0)}</AvatarFallback>
                     </Avatar>
                     <div>

@@ -4,7 +4,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useUser, useFirestore, useDoc, useMemoFirebase } from "@/firebase";
-import { doc, collection, addDoc } from "firebase/firestore";
+import { doc, collection, addDoc, getDoc } from "firebase/firestore";
 import { 
   Zap, 
   BadgeCent, 
@@ -55,6 +55,18 @@ export default function MakeOfferPage() {
 
     setIsSubmitting(true);
     try {
+      // التفهيم لنفس الجنس فقط: الذكر لا يقدّم لمستفهمة، والأنثى لا تقدّم لمستفهم
+      const [meSnap, ownerSnap] = await Promise.all([
+        getDoc(doc(firestore, "users", user.uid)),
+        getDoc(doc(firestore, "users", (request as any).mustafhemId)),
+      ]);
+      const myGender = meSnap.data()?.gender || "";
+      const ownerGender = ownerSnap.data()?.gender || "";
+      if (myGender && ownerGender && myGender !== ownerGender) {
+        toast({ variant: "destructive", title: "غير مسموح", description: ownerGender === "female" ? "صاحبة هذا الاستفهام مستفهمة، ويقتصر التفهيم على نفس الجنس." : "صاحب هذا الاستفهام مستفهم، ويقتصر التفهيم على نفس الجنس." });
+        setIsSubmitting(false);
+        return;
+      }
       await addDoc(collection(firestore, "istifhams", requestId as string, "offers"), {
         mufhemId: user.uid,
         mufhemName: user.displayName || "مفهم",

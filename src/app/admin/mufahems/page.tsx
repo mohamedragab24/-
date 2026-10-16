@@ -112,7 +112,7 @@ export default function AdminMufahems() {
                       <span className="text-xs text-muted-foreground font-bold">{u.email}</span>
                     </div>
                     <Avatar className="h-12 w-12 border-2 border-accent/20">
-                      <AvatarImage src={u.profilePictureUrl} />
+                      <AvatarImage src={u?.profilePictureUrl || (u?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                       <AvatarFallback>{u.fullName?.charAt(0)}</AvatarFallback>
                     </Avatar>
                   </div>
@@ -169,7 +169,7 @@ export default function AdminMufahems() {
                   <Badge className="bg-accent mt-2 font-black">مفهم معتمد</Badge>
                 </div>
                 <Avatar className="h-24 w-24 border-4 border-white shadow-xl">
-                  <AvatarImage src={selectedUser.profilePictureUrl} />
+                  <AvatarImage src={selectedUser?.profilePictureUrl || (selectedUser?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                   <AvatarFallback className="text-2xl font-black">{selectedUser.fullName?.charAt(0)}</AvatarFallback>
                 </Avatar>
               </div>

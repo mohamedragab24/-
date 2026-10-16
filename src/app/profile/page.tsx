@@ -90,6 +90,7 @@ export default function ProfilePage() {
       if (formData.profilePictureUrl && formData.profilePictureUrl !== (profile.profilePicturePending ? currentPending : currentOfficial)) {
         updateData.pendingProfilePictureUrl = formData.profilePictureUrl;
         updateData.profilePicturePending = true;
+        updateData.profilePictureRejectReason = null;
       }
 
       await updateDoc(userRef, updateData);
@@ -104,8 +105,8 @@ export default function ProfilePage() {
   if (isLoading) return <div className="p-20 text-center font-black animate-pulse">جاري تحميل بياناتك...</div>;
 
   const defaultAvatar = profile?.gender === 'female' 
-    ? "https://picsum.photos/seed/female/200/200" 
-    : "https://picsum.photos/seed/male/200/200";
+    ? "/avatars/avatar_female.jpg" 
+    : "/avatars/avatar_male.jpg";
 
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-12 mb-24 text-right" dir="rtl">
@@ -146,6 +147,11 @@ export default function ProfilePage() {
               </div>
             </div>
 
+            {!profile?.profilePicturePending && profile?.profilePictureRejectReason && (
+              <div className="bg-red-50 p-4 rounded-xl text-red-700 font-black text-xs border border-red-100 mb-8">
+                تم رفض صورتك الشخصية: {profile.profilePictureRejectReason}
+              </div>
+            )}
             {profile?.profilePicturePending && (
               <div className="bg-orange-50 p-4 rounded-xl flex items-center gap-3 text-orange-700 font-black text-xs border border-orange-100 mb-8">
                 <Clock size={16} className="shrink-0 animate-pulse" />
