@@ -19,7 +19,9 @@ import {
 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from "@/firebase";
-import { collection, query, orderBy, doc, addDoc } from "firebase/firestore";
+import { collection, query, orderBy, doc } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
+import { initializeFirebase } from "@/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { WalletTopupDialog } from "@/components/wallet/wallet-topup-dialog";
@@ -58,40 +60,26 @@ function WalletContent() {
     ? Number(walletDoc.balance)
     : (Number.isFinite(legacyBalance) ? legacyBalance : ledgerBalance);
 
-  const handleTransaction = async () => {
-    if (!firestore || !user || !amount || !profile) return;
-    const numAmount = Number(amount);
-    
-    if (profile.role === 'mufhem') {
-      if (numAmount > balance) { toast({ variant: "destructive", title: "رصيد غير كافٍ" }); return; }
-      if (!transferTarget) { toast({ variant: "destructive", title: "يرجى تحديد رقم التحويل" }); return; }
-      
-      const txRef = await addDoc(collection(firestore, "users", user.uid, "transactions"), {
-        amount: numAmount,
-        type: 'withdrawal',
-        details: `سحب أرباح (${withdrawalMethod})`,
-        status: 'pending',
-        transferTarget,
-        method: withdrawalMethod,
-        timestamp: new Date().toISOString()
-      });
+  // مفهّم = role mufhem أو mode mofahhem (الحقل يختلف بين الحسابات القديمة والجديدة)
+  const isMufhem = profile?.role === 'mufhem' || profile?.mode === 'mofahhem' || profile?.accountType === 'mofahhem';
 
-      await addDoc(collection(firestore, "payoutRequests"), {
-        userId: user.uid,
-        userName: profile.fullName,
-        method: withdrawalMethod,
-        transferTarget,
-        amount: numAmount,
-        status: 'pending',
-        transactionId: txRef.id,
-        timestamp: new Date().toISOString()
-      });
-      toast({ title: "تم تقديم طلب السحب" });
+  const handleTransaction = async () => {
+    if (!user || !amount || !profile) return;
+    const numAmount = Number(amount);
+    if (!Number.isFinite(numAmount) || numAmount < 50) { toast({ variant: "destructive", title: "أقل مبلغ للسحب 50 جنيه" }); return; }
+    if (numAmount > balance) { toast({ variant: "destructive", title: "رصيد غير كافٍ" }); return; }
+    if (!transferTarget) { toast({ variant: "destructive", title: "يرجى تحديد رقم التحويل" }); return; }
+    try {
+      // الخصم والحجز يتمان في السيرفر (لا يُكتب أي رصيد من المتصفح)
+      const { firebaseApp } = initializeFirebase();
+      await httpsCallable(getFunctions(firebaseApp, "us-central1"), "requestWithdrawal")({ amount: numAmount, method: withdrawalMethod, transferTarget });
+      toast({ title: "تم تقديم طلب السحب", description: "سنراجع الطلب ونحوّل المبلغ، ويظهر لك إيصال التحويل هنا." });
+      setIsModalOpen(false);
+      setAmount("");
+      setTarget("");
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "تعذر تقديم الطلب", description: e?.message && e.message !== "internal" ? e.message : "حاول مرة أخرى." });
     }
-    // شحن المستفهم يتم فقط عبر بوابة الدفع (WalletTopupDialog) ولا يُضاف أي رصيد من المتصفح.
-    setIsModalOpen(false);
-    setAmount("");
-    setTarget("");
   };
 
   if (isLoading || !profile) return <div className="p-10 text-center font-bold">جاري تحميل المحفظة...</div>;
@@ -107,20 +95,27 @@ function WalletContent() {
         <Card className="lg:col-span-2 bg-zinc-900 text-white border-none shadow-2xl rounded-[3rem] p-12 relative overflow-hidden">
           <div className="relative z-10 space-y-10">
             <div className="space-y-2"><span className="text-zinc-400 font-black text-xl">الرصيد المتاح</span><div className="flex items-baseline gap-4"><span className="text-8xl font-black tabular-nums tracking-tighter">{balance}</span><span className="text-3xl font-bold opacity-60">ج.م</span></div></div>
-            <Button onClick={()=> profile.role === 'mustafhem' ? setIsTopupOpen(true) : setIsModalOpen(true)} className="bg-primary text-white px-12 py-10 rounded-3xl font-black text-2xl shadow-xl transition-all">
-              {profile.role === 'mustafhem' ? <><Plus className="ml-3 h-8 w-8" /> إضافة رصيد</> : <><Download className="ml-3 h-8 w-8" /> سحب الأرباح</>}
-            </Button>
+            <div className="flex flex-wrap gap-4">
+              <Button onClick={() => setIsTopupOpen(true)} className="bg-primary text-white px-10 py-8 rounded-3xl font-black text-2xl shadow-xl transition-all">
+                <Plus className="ml-3 h-8 w-8" /> إضافة رصيد
+              </Button>
+              {isMufhem && (
+                <Button onClick={() => setIsModalOpen(true)} variant="secondary" className="px-10 py-8 rounded-3xl font-black text-2xl shadow-xl transition-all">
+                  <Download className="ml-3 h-8 w-8" /> سحب الأرباح
+                </Button>
+              )}
+            </div>
           </div>
         </Card>
       </div>
 
       <WalletTopupDialog open={isTopupOpen} onOpenChange={setIsTopupOpen} />
-      <Dialog open={isModalOpen && profile.role !== 'mustafhem'} onOpenChange={setIsModalOpen}>
+      <Dialog open={isModalOpen && isMufhem} onOpenChange={setIsModalOpen}>
         <DialogContent dir="rtl" className="rounded-[3rem] sm:max-w-[550px]">
-          <DialogHeader><DialogTitle className="text-right text-3xl font-black">{profile.role === 'mustafhem' ? 'شحن المحفظة' : 'سحب الأرباح'}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle className="text-right text-3xl font-black">سحب الأرباح</DialogTitle></DialogHeader>
           <div className="py-6 space-y-8 text-right">
             <div className="space-y-3"><Label className="font-black text-xl">المبلغ (ج.م)</Label><Input type="number" value={amount} onChange={(e)=>setAmount(e.target.value)} className="h-16 text-3xl font-black text-center rounded-2xl border-2" /></div>
-            {profile.role === 'mufhem' && (
+            {isMufhem && (
               <div className="space-y-6">
                 <Label className="font-black text-xl">وسيلة السحب</Label>
                 <RadioGroup value={withdrawalMethod} onValueChange={(v:any)=>setWithdrawalMethod(v)} className="grid gap-3">
@@ -145,8 +140,10 @@ function WalletContent() {
                 <TableRow key={tx.id} className="h-20">
                   <TableCell className="px-8 font-bold">{tx.details}</TableCell>
                   <TableCell className="text-muted-foreground font-bold">{new Date(tx.timestamp).toLocaleDateString('ar-EG')}</TableCell>
-                  <TableCell className={`font-black text-xl ${tx.type === 'deposit' || tx.type === 'earning' ? 'text-green-600' : 'text-red-600'}`}>{tx.type === 'deposit' || tx.type === 'earning' ? '+' : '-'}{tx.amount} ج.م</TableCell>
-                  <TableCell className="px-8"><Badge className={tx.status === 'completed' ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}>{tx.status === 'completed' ? 'ناجحة' : 'قيد الانتظار'}</Badge></TableCell>
+                  <TableCell className={`font-black text-xl ${tx.type === 'deposit' || tx.type === 'earning' || tx.type === 'refund' ? 'text-green-600' : 'text-red-600'}`}>{tx.type === 'deposit' || tx.type === 'earning' || tx.type === 'refund' ? '+' : '-'}{tx.amount} ج.م</TableCell>
+                  <TableCell className="px-8"><Badge className={tx.status === 'completed' ? 'bg-green-100 text-green-600' : tx.status === 'rejected' ? 'bg-red-100 text-red-600' : 'bg-orange-100 text-orange-600'}>{tx.status === 'completed' ? 'ناجحة' : tx.status === 'rejected' ? 'مرفوضة' : 'قيد الانتظار'}</Badge>
+                    {tx.receiptUrl && <a href={tx.receiptUrl} target="_blank" rel="noreferrer" className="block text-xs font-black text-primary underline mt-1">عرض إيصال التحويل</a>}
+                    {tx.receiptNote && <span className="block text-xs font-bold text-zinc-500 mt-1">{tx.receiptNote}</span>}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

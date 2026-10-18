@@ -4,7 +4,9 @@
 import { useState, useEffect, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useUser, useFirestore, useDoc, useMemoFirebase } from "@/firebase";
-import { doc, collection, getDocs, addDoc, updateDoc } from "firebase/firestore";
+import { doc, collection, getDocs } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
+import { initializeFirebase } from "@/firebase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -85,30 +87,14 @@ function CheckoutContent() {
       return;
     }
 
-    if (walletBalance < amountToPay && paymentMethod === 'wallet') {
-      toast({ variant: "destructive", title: "رصيد غير كافٍ", description: "يرجى شحن محفظتك للمتابعة." });
-      return;
-    }
+    // التحقق من الرصيد يتم في السيرفر (المصدر الحقيقي للرصيد)
 
     setIsProcessing(true);
     try {
-      const invoiceNumber = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
-      
-      // تحديث حالة الطلب
-      await updateDoc(requestRef!, { 
-        status: "paid", 
-        invoiceNumber,
-        paidAt: new Date().toISOString()
-      });
-
-      // خصم من المحفظة
-      await addDoc(collection(firestore, "users", user.uid, "transactions"), {
-        amount: amountToPay,
-        type: 'payment',
-        details: `دفع رسوم محاضرة: ${request.title}`,
-        status: 'completed',
-        timestamp: new Date().toISOString()
-      });
+      // الدفع يتم في السيرفر: خصم من المحفظة + تسجيل 20% للمنصة و80% للمفهم
+      const { firebaseApp } = initializeFirebase();
+      const paid: any = await httpsCallable(getFunctions(firebaseApp, "us-central1"), "payIstifham")({ requestId, offerId });
+      const invoiceNumber = paid?.data?.invoiceNumber || `INV-${Date.now()}`;
       
       setInvoiceData({
         number: invoiceNumber,
@@ -122,8 +108,8 @@ function CheckoutContent() {
 
       toast({ title: "تم الدفع بنجاح!" });
       setShowInvoice(true);
-    } catch (e) {
-      toast({ variant: "destructive", title: "خطأ في الدفع" });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "خطأ في الدفع", description: e?.message && e.message !== "internal" ? e.message : undefined });
     } finally {
       setIsProcessing(false);
     }

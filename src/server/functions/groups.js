@@ -430,6 +430,19 @@ exports.startGroupSession = onCall(async (request) => {
   const title = String(request.data?.title || '').trim().slice(0, 120) || `جلسة ${new Date().toLocaleDateString('ar-EG', { timeZone: TZ })}`;
   const doc = ref.collection('sessions').doc();
   await doc.set({ title, record, status: 'live', startedAt: FV.serverTimestamp(), room: `Fahimni_group_${id}_${doc.id}` });
+  let recordingWarning = '';
+  if (record) {
+    // تسجيل Agora السحابي: يبدأ مع الجلسة ويحفظ الملف في R2 عند الإنهاء
+    try {
+      const channel = `Group_${id}_${doc.id}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+      const state = await require('./agora-recording').startRecording({ channel, groupId: id });
+      await doc.update({ recordingState: state });
+    } catch (e) {
+      console.error('agora recording start failed', e);
+      recordingWarning = String(e?.message || e).slice(0, 300);
+      await doc.update({ recordingError: recordingWarning });
+    }
+  }
   const members = await ref.collection('members').get();
   for (const m of members.docs) await notify(m.id, 'بدأت جلسة جديدة', `بدأ المُفهم جلسة في «${g.name}» — ادخل من التطبيق`, { type: 'group_session', groupId: id, sessionId: doc.id }, `gsession_${doc.id}`);
   // إشعار في شريط إشعارات الهاتف لكل أعضاء المجموعة (غير صاحب الجلسة)
@@ -441,7 +454,7 @@ exports.startGroupSession = onCall(async (request) => {
       data: { type: 'group_session', groupId: id, sessionId: doc.id },
     });
   } catch (e) { console.error('group session push failed', e); }
-  return { ok: true, sessionId: doc.id, room: `Fahimni_group_${id}_${doc.id}` };
+  return { ok: true, sessionId: doc.id, room: `Fahimni_group_${id}_${doc.id}`, recordingWarning };
 });
 
 exports.endGroupSession = onCall(async (request) => {
@@ -463,8 +476,13 @@ exports.endGroupSession = onCall(async (request) => {
       await batch.commit();
     }
   } catch (e) { console.error('delete session notifications failed', e); }
+  let agoraResult = null;
+  if (d.record && d.recordingState?.resourceId) {
+    try { agoraResult = await require('./agora-recording').stopRecording(d.recordingState); }
+    catch (e) { console.error('agora recording stop failed', e); agoraResult = { error: String(e?.message || e).slice(0, 300) }; }
+  }
   if (d.record) {
-    // يُضاف تلقائيًا لقسم الجلسات المسجلة؛ يكتمل الملف عند وصول تسجيل JaaS (webhook).
+    // يُضاف تلقائيًا لقسم الجلسات المسجلة؛ يكتمل الملف من تسجيل Agora (أو JaaS webhook للجلسات القديمة).
     // لا نعيد حالة تسجيل اكتمل رفعه بالفعل (الـ webhook قد يسبق إنهاء الجلسة).
     const rRef = ref.collection('recordings').doc(sid);
     const lRef = db.collection('lectureRecordings').doc(sid);
@@ -474,8 +492,37 @@ exports.endGroupSession = onCall(async (request) => {
     const meta = { kind: 'group', title: d.title, groupId: ref.id, groupName: g.name || '', ownerUid: g.ownerUid || '', ownerName: g.ownerName || '', sessionId: sid, room: d.room || '' };
     if (!lEx.exists) await lRef.set({ ...meta, status: 'processing', size: 0, durationSec: 0, createdAt: FV.serverTimestamp(), order: Date.now() });
     else await lRef.set(meta, { merge: true });
+    if (agoraResult) {
+      if (agoraResult.mp4 && agoraResult.mp4.startsWith(`groups/${ref.id}/`)) {
+        await rRef.set({ r2Key: agoraResult.mp4, status: 'ready', source: 'agora' }, { merge: true });
+        await lRef.set({ r2Key: agoraResult.mp4, status: 'ready', source: 'agora', readyAt: FV.serverTimestamp() }, { merge: true });
+      } else {
+        const why = agoraResult.error || (agoraResult.files?.length ? 'لم يُنتج ملف mp4 (تم إنتاج HLS فقط)' : 'لم يُسجَّل أي صوت أو فيديو في الجلسة');
+        await rRef.set({ status: 'failed', error: why }, { merge: true });
+        await lRef.set({ status: 'failed', error: why }, { merge: true });
+      }
+    } else if (d.recordingError) {
+      await rRef.set({ status: 'failed', error: String(d.recordingError) }, { merge: true });
+      await lRef.set({ status: 'failed', error: String(d.recordingError) }, { merge: true });
+    }
   }
   return { ok: true, recording: !!d.record };
+});
+
+/** يحفظ شات الجلسة المسجلة مع التسجيل ليظهر لمن يشاهده (يُستدعى من مدير الاجتماع بعد إنهائها). */
+exports.saveGroupSessionChat = onCall(async (request) => {
+  const uid = reqUid(request);
+  const { ref } = await loadManageableGroup(uid, request.data?.groupId, 'manageSessions', { requireActive: false });
+  const sid = String(request.data?.sessionId || '').trim();
+  if (!sid) throw new HttpsError('invalid-argument', 'الجلسة غير محددة');
+  const rRef = ref.collection('recordings').doc(sid);
+  if (!(await rRef.get()).exists) return { ok: true, saved: 0 }; // الجلسة لم تكن مسجلة
+  const raw = Array.isArray(request.data?.messages) ? request.data.messages.slice(0, 500) : [];
+  const chatLog = raw
+    .map((m) => ({ n: String(m?.n || '').slice(0, 60), x: String(m?.x || '').slice(0, 300), at: Number(m?.at) || 0 }))
+    .filter((m) => m.x.trim());
+  await rRef.set({ chatLog }, { merge: true });
+  return { ok: true, saved: chatLog.length };
 });
 
 exports.attachGroupRecording = onCall(async (request) => {

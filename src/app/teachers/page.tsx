@@ -33,7 +33,7 @@ export default function TeachersPage() {
 
   const teachersQuery = useMemoFirebase(() => {
     if (!firestore) return null;
-    return query(collection(firestore, "users"), where("role", "==", "mufhem"), where("isProfileApproved", "==", true));
+    return query(collection(firestore, "users"), where("role", "==", "mufhem"));
   }, [firestore]);
 
   const { data: teachers, isLoading } = useCollection(teachersQuery);
@@ -63,10 +63,11 @@ export default function TeachersPage() {
 
   const { data: completedProjects } = useCollection(completedProjectsQuery);
 
-  const filteredTeachers = teachers?.filter(t => 
+  // كل المفهمين يظهرون (اعتماد الصورة لا يخفي الحساب)؛ المحظورون فقط يُستثنون
+  const filteredTeachers = teachers?.filter(t => t.status !== 'banned' && t.isBanned !== true && (
     t.fullName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     t.specialization?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  ));
 
   const handleStartChat = async () => {
     if (!currentUser || !selectedTeacher) {

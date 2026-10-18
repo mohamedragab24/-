@@ -227,6 +227,11 @@ exports.createMediaUploadUrl = onCall({ secrets: R2_SECRETS }, async (request) =
     if (!(contentType.startsWith('video/') || contentType.startsWith('image/'))) throw new HttpsError('invalid-argument', 'نوع الملف غير مدعوم');
     if (size > 2 * 1024 * 1024 * 1024) throw new HttpsError('invalid-argument', 'الحد الأقصى للملف 2 جيجا');
     key = `portfolio/${uid}/${stamp}_${safe}`;
+  } else if (kind === 'receipt') {
+    if (!(await isAdminRequest(request))) throw new HttpsError('permission-denied', 'للأدمن فقط');
+    if (!contentType.startsWith('image/') && contentType !== 'application/pdf') throw new HttpsError('invalid-argument', 'الإيصال صورة أو PDF');
+    if (size > 10 * 1024 * 1024) throw new HttpsError('invalid-argument', 'الحد الأقصى 10 ميجا');
+    key = `receipts/${stamp}_${safe}`;
   } else if (kind === 'meeting') {
     if (!(contentType === 'application/pdf' || contentType.startsWith('image/'))) throw new HttpsError('invalid-argument', 'المسموح PDF أو صور فقط');
     if (size > 30 * 1024 * 1024) throw new HttpsError('invalid-argument', 'الحد الأقصى للملف 30 ميجا');
@@ -1037,3 +1042,5 @@ Object.assign(exports, require('./payments-admin'));
 Object.assign(exports, require('./recordings'));
 Object.assign(exports, require('./system-check'));
 Object.assign(exports, require('./app-updates'));
+Object.assign(exports, require('./security'));
+Object.assign(exports, require('./istifham'));

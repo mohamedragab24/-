@@ -56,8 +56,14 @@ function CreateRequestContent() {
       return;
     }
 
+    const price = Number(formData.amount);
+    if (!Number.isFinite(price) || price < 50) {
+      toast({ variant: "destructive", title: "السعر غير صحيح", description: "السعر لا يقل عن 50 جنيه." });
+      return;
+    }
+
     if (!user) {
-      localStorage.setItem('pending_istifham', JSON.stringify({ ...formData, amount: 0 }));
+      localStorage.setItem('pending_istifham', JSON.stringify({ ...formData, amount: price }));
       toast({ title: "خطوة واحدة تفصلك!", description: "يرجى تسجيل حسابك الآن ليتم نشر استفهامك تلقائياً." });
       router.push("/login?mode=signup&returnTo=create-request");
       return;
@@ -67,8 +73,8 @@ function CreateRequestContent() {
     try {
       await addDoc(collection(firestore!, "istifhams"), {
         ...formData,
-        originalAmount: 0,
-        amount: 0,
+        originalAmount: price,
+        amount: price,
         couponApplied: null,
         status: "pending_approval",
         mustafhemId: user.uid,
@@ -168,9 +174,9 @@ function CreateRequestContent() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
             <div className="p-6 rounded-3xl bg-emerald-50 border-2 border-emerald-100 text-center space-y-2">
-              <div className="text-sm font-black text-emerald-700">الخدمة مجانية حاليًا</div>
-              <div className="text-4xl font-black text-emerald-800">0 ج.م</div>
-              <p className="text-xs font-bold text-emerald-700">لا تحتاج لإدخال سعر أو كوبون أثناء الفترة المجانية.</p>
+              <div className="text-sm font-black text-emerald-700">السعر الذي ستدفعه (ج.م) — لا يقل عن 50</div>
+              <Input type="number" min={50} value={formData.amount} onChange={(e)=>setFormData({...formData, amount: e.target.value})} className="h-16 text-3xl font-black text-center rounded-2xl border-2" placeholder="50" />
+              <p className="text-xs font-bold text-emerald-700">80% للمفهم كاملة و20% للمنصة.</p>
             </div>
             <div className="space-y-3">
               <Label className="font-black text-lg flex items-center gap-2">الموعد المفضل <Clock size={18} className="text-blue-600"/></Label>

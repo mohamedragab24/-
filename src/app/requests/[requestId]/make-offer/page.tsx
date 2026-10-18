@@ -60,10 +60,11 @@ export default function MakeOfferPage() {
         getDoc(doc(firestore, "users", user.uid)),
         getDoc(doc(firestore, "users", (request as any).mustafhemId)),
       ]);
-      const myGender = meSnap.data()?.gender || "";
-      const ownerGender = ownerSnap.data()?.gender || "";
+      const norm = (g: any) => { const v = String(g || "").trim().toLowerCase(); if (!v) return ""; if (v.startsWith("f") || v.includes("أنث") || v.includes("انث")) return "female"; if (v.startsWith("m") || v.includes("ذكر")) return "male"; return ""; };
+      const myGender = norm(meSnap.data()?.gender);
+      const ownerGender = norm(ownerSnap.data()?.gender);
       if (myGender && ownerGender && myGender !== ownerGender) {
-        toast({ variant: "destructive", title: "غير مسموح", description: ownerGender === "female" ? "صاحبة هذا الاستفهام مستفهمة، ويقتصر التفهيم على نفس الجنس." : "صاحب هذا الاستفهام مستفهم، ويقتصر التفهيم على نفس الجنس." });
+        toast({ variant: "destructive", title: "غير مسموح", description: "لا يمكنك تقديم عرض لهذا المستخدم" });
         setIsSubmitting(false);
         return;
       }
@@ -71,7 +72,7 @@ export default function MakeOfferPage() {
         mufhemId: user.uid,
         mufhemName: user.displayName || "مفهم",
         mufhemAvatar: user.photoURL || "",
-        amount: 0, // دائماً صفر في الفترة المجانية
+        amount: Number((request as any).amount) || 50, // سعر الاستفهام الذي حدده المستفهم
         readyAt: formData.readyAt,
         details: formData.details,
         status: "pending",
@@ -132,10 +133,10 @@ export default function MakeOfferPage() {
                   <Input 
                     type="text" 
                     readOnly
-                    className="h-16 rounded-2xl border-2 font-black text-3xl text-center shadow-inner bg-zinc-50 text-zinc-400" 
-                    value="0" 
+                    className="h-16 rounded-2xl border-2 font-black text-3xl text-center shadow-inner bg-zinc-50 text-zinc-700" 
+                    value={String((request as any)?.amount ?? 50)} 
                   />
-                  <p className="text-[10px] text-green-600 font-black text-center">الخدمة مجانا لحين انتهاء الفترة المجانية</p>
+                  <p className="text-[10px] text-green-600 font-black text-center">السعر حدده المستفهم؛ تحصل على 80% كاملة والمنصة 20%</p>
                 </div>
                 <div className="space-y-3 text-right">
                   <Label className="font-black text-lg flex items-center gap-2 justify-end">موعد الجاهزية <Clock size={18} className="text-blue-600"/></Label>

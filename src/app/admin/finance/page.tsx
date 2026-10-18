@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { useFirestore, useCollection, useMemoFirebase, useUser, useDoc } from "@/firebase";
-import { collection, query, where, getDocs, doc, getDoc, updateDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { initializeFirebase } from "@/firebase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -122,41 +122,47 @@ export default function AdminFinance() {
     }
   };
 
-  const approvePayout = async (payout: any) => {
-    if (!firestore) return;
+  const [receiptPayout, setReceiptPayout] = useState<any>(null);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptNote, setReceiptNote] = useState("");
+  const [payoutBusy, setPayoutBusy] = useState(false);
+
+  const approvePayout = (payout: any) => { setReceiptPayout(payout); setReceiptFile(null); setReceiptNote(""); };
+
+  // تأكيد الدفع: يرفع إيصال التحويل (صورة/PDF) إلى R2 ثم يسجّله على الطلب فيظهر للمفهم وللأدمن
+  const confirmPayout = async () => {
+    if (!receiptPayout) return;
+    if (!receiptFile && !receiptNote.trim()) { toast({ variant: "destructive", title: "ارفع صورة الإيصال أو اكتب رقم العملية" }); return; }
+    setPayoutBusy(true);
     try {
-      await updateDoc(doc(firestore, "payoutRequests", payout.id), { status: 'completed' });
-      if (payout.transactionId) {
-        await updateDoc(doc(firestore, "users", payout.userId, "transactions", payout.transactionId), {
-          status: 'completed',
-          details: 'تم تحويل أرباحك لمحفظتك بنجاح'
-        });
+      const { firebaseApp } = initializeFirebase();
+      const fns = getFunctions(firebaseApp, "us-central1");
+      let receiptUrl = "";
+      if (receiptFile) {
+        const signed: any = await httpsCallable(fns, "createMediaUploadUrl")({ kind: "receipt", fileName: receiptFile.name, contentType: receiptFile.type || "image/jpeg", size: receiptFile.size });
+        const put = await fetch(signed.data.url, { method: "PUT", headers: { "Content-Type": receiptFile.type || "image/jpeg" }, body: receiptFile });
+        if (!put.ok) throw new Error("فشل رفع الإيصال");
+        receiptUrl = signed.data.publicUrl;
       }
-      toast({ title: "تم التحويل", description: "تم تأكيد تحويل المبلغ بنجاح." });
-    } catch (e) {
-      toast({ variant: "destructive", title: "خطأ", description: "فشل معالجة الطلب." });
-    }
+      await httpsCallable(fns, "adminCompletePayout")({ payoutId: receiptPayout.id, receiptUrl, note: receiptNote.trim() });
+      toast({ title: "تم تأكيد التحويل", description: "ظهر الإيصال للمفهم وفي سجلك." });
+      setReceiptPayout(null);
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "خطأ", description: e?.message && e.message !== "internal" ? e.message : "فشل معالجة الطلب." });
+    } finally { setPayoutBusy(false); }
   };
 
   const rejectPayout = async () => {
-    if (!firestore || !selectedPayout || !rejectionReason.trim()) return;
+    if (!selectedPayout || !rejectionReason.trim()) return;
     try {
-      await updateDoc(doc(firestore, "payoutRequests", selectedPayout.id), { 
-        status: 'rejected',
-        rejectionReason: rejectionReason 
-      });
-      if (selectedPayout.transactionId) {
-        await updateDoc(doc(firestore, "users", selectedPayout.userId, "transactions", selectedPayout.transactionId), {
-          status: 'rejected',
-          details: `مرفوض: ${rejectionReason}`
-        });
-      }
+      const { firebaseApp } = initializeFirebase();
+      await httpsCallable(getFunctions(firebaseApp, "us-central1"), "adminRejectPayout")({ payoutId: selectedPayout.id, reason: rejectionReason.trim() });
       setIsRejectModalOpen(false);
       setRejectionReason("");
       setSelectedPayout(null);
       toast({ title: "تم الرفض", description: "تم رفض الطلب وإعادة الرصيد للمستخدم." });
-    } catch (e) {
-      toast({ variant: "destructive", title: "خطأ", description: "فشل رفض الطلب." });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "خطأ", description: e?.message && e.message !== "internal" ? e.message : "فشل رفض الطلب." });
     }
   };
 
@@ -166,6 +172,16 @@ export default function AdminFinance() {
 
   return (
     <div className="p-6 md:p-10 space-y-10" dir="rtl">
+      <Dialog open={!!receiptPayout} onOpenChange={(o) => { if (!o) setReceiptPayout(null); }}>
+        <DialogContent dir="rtl" className="rounded-[2rem]">
+          <DialogHeader className="text-right"><DialogTitle className="font-black">تأكيد تحويل {receiptPayout?.amount} ج.م</DialogTitle><DialogDescription className="text-right">حوّل المبلغ على {receiptPayout?.transferTarget || receiptPayout?.phoneNumber} ثم ارفع صورة الإيصال لمنع أي لبس.</DialogDescription></DialogHeader>
+          <div className="space-y-4 text-right">
+            <Input type="file" accept="image/*,application/pdf" onChange={(e) => setReceiptFile(e.target.files?.[0] || null)} />
+            <Input placeholder="رقم العملية / ملاحظة (اختياري مع الصورة)" value={receiptNote} onChange={(e) => setReceiptNote(e.target.value)} />
+          </div>
+          <DialogFooter><Button onClick={confirmPayout} disabled={payoutBusy} className="w-full font-black">{payoutBusy ? "جاري الرفع..." : "تأكيد وإرسال الإيصال للمفهم"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className="flex justify-between items-center border-r-8 border-purple-500 pr-6">
         <div className="space-y-1">
           <h1 className="text-4xl font-black font-headline">إدارة المالية</h1>
@@ -354,7 +370,7 @@ function PayoutTable({ payouts, onApprove, onReject, readonly, showReason }: any
                 </div>
               </TableCell>
               <TableCell className="font-black text-purple-600 text-lg">{p.amount} ج.م</TableCell>
-              <TableCell className="font-mono font-bold">{p.phoneNumber}</TableCell>
+              <TableCell className="font-mono font-bold">{p.transferTarget || p.phoneNumber}{p.receiptUrl && <a href={p.receiptUrl} target="_blank" rel="noreferrer" className="block text-xs text-primary underline">الإيصال</a>}</TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 {new Date(p.timestamp).toLocaleDateString('ar-EG')}
               </TableCell>

@@ -1,7 +1,8 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useUser, useFirestore, useDoc, useMemoFirebase, useCollection } from "@/firebase";
+import { useUser, useFirestore, useDoc, useMemoFirebase, useCollection, initializeFirebase } from "@/firebase";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { doc, collection, query, orderBy, addDoc, updateDoc, where } from "firebase/firestore";
 import { 
   Clock, 
@@ -71,6 +72,8 @@ export default function RequestDetailsPage() {
   }, [firestore, currentUser?.uid]);
 
   const { data: profile } = useDoc(userRef);
+  const ownerRef = useMemoFirebase(() => (firestore && request?.mustafhemId) ? doc(firestore, "users", request.mustafhemId) : null, [firestore, request?.mustafhemId]);
+  const { data: ownerProfile } = useDoc(ownerRef);
 
   const acceptOffer = (offer: any) => {
     router.push(`/checkout/${requestId}?offerId=${offer.id}`);
@@ -86,7 +89,9 @@ export default function RequestDetailsPage() {
   if (!request) return <div className="p-20 text-center font-bold text-red-500">الاستفهام غير موجود.</div>;
 
   const isOwner = currentUser?.uid === request.mustafhemId;
-  const isMufhem = profile?.role === 'mufhem';
+  const isMufhem = profile?.role === 'mufhem' || profile?.mode === 'mofahhem' || profile?.accountType === 'mofahhem';
+  const normG = (g: any) => { const v = String(g || '').trim().toLowerCase(); if (!v) return ''; if (v.startsWith('f') || v.includes('أنث') || v.includes('انث')) return 'female'; if (v.startsWith('m') || v.includes('ذكر')) return 'male'; return ''; };
+  const genderBlocked = !!(normG(profile?.gender) && normG(ownerProfile?.gender) && normG(profile?.gender) !== normG(ownerProfile?.gender));
   const myOffer = offers?.find((o: any) => o.mufhemId === currentUser?.uid);
 
   return (
@@ -143,13 +148,27 @@ export default function RequestDetailsPage() {
                 )}
 
                 {!isOwner && isMufhem && request.status === 'active' && !myOffer && (
-                  <div className="pt-10">
+                  <div className="pt-10 space-y-2">
                     <Button 
+                      disabled={genderBlocked}
                       onClick={() => router.push(`/requests/${requestId}/make-offer`)}
-                      className="w-full h-20 rounded-[2rem] text-2xl font-black bg-primary shadow-2xl hover:scale-[1.02] transition-all"
+                      className={`w-full h-20 rounded-[2rem] text-2xl font-black bg-primary shadow-2xl hover:scale-[1.02] transition-all ${genderBlocked ? 'opacity-40 hover:scale-100' : ''}`}
                     >
                       <Zap className="ml-2" /> قدم عرضك الآن
                     </Button>
+                    {genderBlocked && <p className="text-center text-sm font-black text-red-600">لا يمكنك تقديم عرض لهذا المستخدم</p>}
+                  </div>
+                )}
+
+                {isOwner && request.status === 'paid' && (
+                  <div className="pt-6">
+                    <Button variant="outline" className="w-full h-14 rounded-2xl font-black" onClick={async () => {
+                      try {
+                        const { firebaseApp } = initializeFirebase();
+                        await httpsCallable(getFunctions(firebaseApp, "us-central1"), "completeIstifham")({ requestId });
+                        toast({ title: "تم تأكيد اكتمال الجلسة", description: "تم تحويل أرباح المفهم (80%)." });
+                      } catch (e: any) { toast({ variant: "destructive", title: "تعذر التأكيد", description: e?.message }); }
+                    }}>تأكيد اكتمال الجلسة</Button>
                   </div>
                 )}
 

@@ -1,0 +1,101 @@
+/**
+ * تسجيل اجتماعات المجموعات عبر Agora Cloud Recording (وضع mix: فيديو واحد لكل الجلسة)
+ * مع الحفظ مباشرة في Cloudflare R2 (S3-compatible) تحت groups/<groupId>/recordings/.
+ *
+ * متغيرات Vercel المطلوبة:
+ *   AGORA_APP_ID, AGORA_APP_CERTIFICATE            (موجودة للاجتماعات)
+ *   AGORA_CUSTOMER_ID, AGORA_CUSTOMER_SECRET       (Agora Console ← RESTful API ← Add a secret)
+ *   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET   (موجودة للرفع)
+ * ولازم تفعّل Cloud Recording على مشروع Agora من Console.
+ */
+const REC_UID = 2147483000; // معرّف «المسجِّل» داخل القناة (لا يستخدمه أي مستخدم)
+
+const cfg = () => ({
+  appId: String(process.env.AGORA_APP_ID || '').trim(),
+  cert: String(process.env.AGORA_APP_CERTIFICATE || '').trim(),
+  customerId: String(process.env.AGORA_CUSTOMER_ID || '').trim(),
+  customerSecret: String(process.env.AGORA_CUSTOMER_SECRET || '').trim(),
+  r2Account: String(process.env.R2_ACCOUNT_ID || '').trim(),
+  r2Key: String(process.env.R2_ACCESS_KEY_ID || '').trim(),
+  r2Secret: String(process.env.R2_SECRET_ACCESS_KEY || '').trim(),
+  bucket: String(process.env.R2_BUCKET || 'fahmny-videos').trim(),
+});
+
+function missing(c) {
+  return [
+    !c.appId && 'AGORA_APP_ID', !c.cert && 'AGORA_APP_CERTIFICATE',
+    !c.customerId && 'AGORA_CUSTOMER_ID', !c.customerSecret && 'AGORA_CUSTOMER_SECRET',
+    !c.r2Account && 'R2_ACCOUNT_ID', !c.r2Key && 'R2_ACCESS_KEY_ID', !c.r2Secret && 'R2_SECRET_ACCESS_KEY',
+  ].filter(Boolean);
+}
+
+async function call(c, path, body) {
+  const auth = Buffer.from(`${c.customerId}:${c.customerSecret}`).toString('base64');
+  const res = await fetch(`https://api.agora.io/v1/apps/${c.appId}/cloud_recording/${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json;charset=utf-8' },
+    body: JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok) {
+    const msg = data?.reason || data?.message || `HTTP ${res.status}`;
+    const err = new Error(`Agora ${path.split('/').pop()}: ${msg}`);
+    err.agoraStatus = res.status;
+    throw err;
+  }
+  return data;
+}
+
+/** يبدأ التسجيل (يُستدعى عند بدء جلسة مسجلة). يرجّع الحالة المطلوب حفظها على الجلسة. */
+async function startRecording({ channel, groupId }) {
+  const c = cfg();
+  const miss = missing(c);
+  if (miss.length) throw new Error(`إعدادات التسجيل ناقصة في Vercel: ${miss.join(', ')}`);
+  const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
+  const token = RtcTokenBuilder.buildTokenWithUid(c.appId, c.cert, channel, REC_UID, RtcRole.SUBSCRIBER, Math.floor(Date.now() / 1000) + 6 * 3600);
+  const uid = String(REC_UID);
+
+  const acq = await call(c, 'acquire', { cname: channel, uid, clientRequest: { resourceExpiredHour: 24, scene: 0 } });
+  const resourceId = acq.resourceId;
+  const start = await call(c, `resourceid/${resourceId}/mode/mix/start`, {
+    cname: channel,
+    uid,
+    clientRequest: {
+      token,
+      recordingConfig: {
+        channelType: 0,
+        streamTypes: 2, // صوت + فيديو
+        maxIdleTime: 1800, // يبقى بانتظار دخول أحد حتى 30 دقيقة
+        transcodingConfig: { width: 1280, height: 720, fps: 15, bitrate: 1200, mixedVideoLayout: 1, backgroundColor: '#000000' },
+      },
+      recordingFileConfig: { avFileType: ['hls', 'mp4'] },
+      storageConfig: {
+        vendor: 11, // تخزين متوافق مع S3 (Cloudflare R2)
+        region: 0,
+        bucket: c.bucket,
+        accessKey: c.r2Key,
+        secretKey: c.r2Secret,
+        fileNamePrefix: ['groups', groupId, 'recordings'],
+        extensionParams: { endpoint: `${c.r2Account}.r2.cloudflarestorage.com` },
+      },
+    },
+  });
+  return { resourceId, sid: start.sid, uid, channel };
+}
+
+/** يوقف التسجيل ويرجّع مسار ملف mp4 داخل R2 (أو null لو لم يُنتج). */
+async function stopRecording(state) {
+  const c = cfg();
+  const res = await call(c, `resourceid/${state.resourceId}/sid/${state.sid}/mode/mix/stop`, {
+    cname: state.channel,
+    uid: state.uid,
+    clientRequest: { async_stop: false },
+  });
+  const list = res?.serverResponse?.fileList;
+  const names = Array.isArray(list) ? list.map((f) => String(f?.fileName || '')) : (typeof list === 'string' ? [list] : []);
+  const mp4 = names.find((n) => n.toLowerCase().endsWith('.mp4')) || null;
+  return { mp4, files: names };
+}
+
+module.exports = { startRecording, stopRecording };

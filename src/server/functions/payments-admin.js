@@ -177,3 +177,99 @@ exports.adminDeleteGateway = onCall(async (request) => {
   await resyncProvider(key);
   return { ok: true };
 });
+
+// ---------------------------------------------------------------- سحب الأرباح (مع إثبات تحويل)
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const MIN_WITHDRAW = 50;
+
+/** الرصيد الحالي داخل transaction (نفس ترتيب المصادر المستخدم في شراء الكورس). */
+async function balanceInTx(tx, uid) {
+  const userRef = db.collection('users').doc(uid);
+  const walletRef = db.collection('wallets').doc(uid);
+  const [w, u] = [await tx.get(walletRef), await tx.get(userRef)];
+  let b = Number(w.data()?.balance);
+  if (!Number.isFinite(b)) b = Number(u.data()?.balance);
+  if (!Number.isFinite(b)) {
+    const txs = await tx.get(userRef.collection('transactions'));
+    b = txs.docs.reduce((acc, d) => {
+      const t = d.data() || {};
+      if (['rejected', 'pending', 'cancelled'].includes(String(t.status || ''))) return acc;
+      const n = Number(t.amount || 0);
+      return ['deposit', 'earning', 'refund'].includes(String(t.type || '')) ? acc + n : acc - n;
+    }, 0);
+  }
+  return { b: Number.isFinite(b) ? b : 0, userRef, walletRef };
+}
+
+/** طلب سحب أرباح: يُحجز المبلغ فورًا من الرصيد ويظهر للمفهم وللأدمن حتى يتم التحويل. */
+exports.requestWithdrawal = onCall(async (request) => {
+  const uid = reqUid(request);
+  const amount = round2(request.data?.amount);
+  const method = String(request.data?.method || '').slice(0, 40);
+  const target = String(request.data?.transferTarget || '').trim().slice(0, 80);
+  const me = (await db.collection('users').doc(uid).get()).data() || {};
+  const isMufhem = me.role === 'mufhem' || me.mode === 'mofahhem' || me.accountType === 'mofahhem' || me.isAdmin === true;
+  if (!isMufhem) throw new HttpsError('permission-denied', 'سحب الأرباح متاح للمفهمين فقط');
+  if (!Number.isFinite(amount) || amount < MIN_WITHDRAW) throw new HttpsError('invalid-argument', `أقل مبلغ للسحب ${MIN_WITHDRAW} جنيه`);
+  if (!method || target.replace(/\s/g, '').length < 6) throw new HttpsError('invalid-argument', 'اختر وسيلة السحب واكتب رقم الحساب/المحفظة');
+  const open = await db.collection('payoutRequests').where('userId', '==', uid).where('status', '==', 'pending').get();
+  if (open.size >= 3) throw new HttpsError('resource-exhausted', 'لديك طلبات سحب معلّقة كثيرة');
+
+  const payoutRef = db.collection('payoutRequests').doc();
+  const txRef = db.collection('users').doc(uid).collection('transactions').doc();
+  await db.runTransaction(async (tx) => {
+    const { b, userRef, walletRef } = await balanceInTx(tx, uid);
+    if (b + 0.0001 < amount) throw new HttpsError('failed-precondition', `رصيدك غير كافٍ (${b.toFixed(2)} جنيه)`);
+    const next = round2(b - amount);
+    tx.set(walletRef, { balance: next, updatedAt: FV.serverTimestamp() }, { merge: true });
+    tx.set(userRef, { balance: next, updatedAt: FV.serverTimestamp() }, { merge: true });
+    tx.set(txRef, { amount, type: 'withdrawal', status: 'pending', details: `طلب سحب أرباح (${method})`, method, transferTarget: target, payoutId: payoutRef.id, timestamp: new Date().toISOString(), balanceAfter: next });
+    tx.set(payoutRef, { userId: uid, userName: String(me.fullName || me.name || ''), userEmail: String(me.email || ''), method, transferTarget: target, phoneNumber: target, amount, status: 'pending', transactionId: txRef.id, timestamp: new Date().toISOString() });
+  });
+  return { ok: true, payoutId: payoutRef.id };
+});
+
+/** الأدمن: تأكيد دفع طلب السحب مع صورة إيصال التحويل (تظهر للمفهم وللأدمن). */
+exports.adminCompletePayout = onCall(async (request) => {
+  reqUid(request);
+  if (!(await isAdminReq(request))) throw new HttpsError('permission-denied', 'للأدمن فقط');
+  const id = String(request.data?.payoutId || '').trim();
+  const receiptUrl = String(request.data?.receiptUrl || '').trim();
+  const note = String(request.data?.note || '').trim().slice(0, 300);
+  if (!id) throw new HttpsError('invalid-argument', 'الطلب غير محدد');
+  if (!receiptUrl && !note) throw new HttpsError('invalid-argument', 'ارفع صورة الإيصال أو اكتب رقم عملية التحويل');
+  const ref = db.collection('payoutRequests').doc(id);
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref);
+    if (!s.exists) throw new HttpsError('not-found', 'الطلب غير موجود');
+    const d = s.data();
+    if (d.status !== 'pending') throw new HttpsError('failed-precondition', 'تمت معالجة هذا الطلب من قبل');
+    tx.update(ref, { status: 'completed', receiptUrl, receiptNote: note, completedBy: request.auth.uid, completedAt: new Date().toISOString() });
+    if (d.transactionId) tx.update(db.collection('users').doc(d.userId).collection('transactions').doc(d.transactionId), { status: 'completed', details: 'تم تحويل أرباحك', receiptUrl, receiptNote: note });
+  });
+  await db.collection('adminLogs').add({ action: 'payout_complete', payoutId: id, adminUid: request.auth.uid, timestamp: FV.serverTimestamp() });
+  return { ok: true };
+});
+
+/** الأدمن: رفض طلب سحب وإعادة المبلغ المحجوز للرصيد. */
+exports.adminRejectPayout = onCall(async (request) => {
+  reqUid(request);
+  if (!(await isAdminReq(request))) throw new HttpsError('permission-denied', 'للأدمن فقط');
+  const id = String(request.data?.payoutId || '').trim();
+  const reason = String(request.data?.reason || '').trim().slice(0, 300);
+  if (!id || !reason) throw new HttpsError('invalid-argument', 'اكتب سبب الرفض');
+  const ref = db.collection('payoutRequests').doc(id);
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref);
+    if (!s.exists) throw new HttpsError('not-found', 'الطلب غير موجود');
+    const d = s.data();
+    if (d.status !== 'pending') throw new HttpsError('failed-precondition', 'تمت معالجة هذا الطلب من قبل');
+    const { b, userRef, walletRef } = await balanceInTx(tx, d.userId);
+    const next = round2(b + Number(d.amount || 0));
+    tx.set(walletRef, { balance: next, updatedAt: FV.serverTimestamp() }, { merge: true });
+    tx.set(userRef, { balance: next, updatedAt: FV.serverTimestamp() }, { merge: true });
+    tx.update(ref, { status: 'rejected', rejectionReason: reason });
+    if (d.transactionId) tx.update(db.collection('users').doc(d.userId).collection('transactions').doc(d.transactionId), { status: 'rejected', details: `مرفوض: ${reason}` });
+  });
+  return { ok: true };
+});
