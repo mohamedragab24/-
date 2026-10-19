@@ -150,3 +150,14 @@ exports.adminResetDeviceLock = onCall(async (request) => {
   await db.collection('adminLogs').add({ action: 'device_lock_reset', targetUid: target, adminUid: request.auth.uid, timestamp: FV.serverTimestamp() });
   return { ok: true };
 });
+
+/** تحويل الحساب بين مُفهم ومُستفهم: يُحدّث role وmode وaccountType معًا. data: { role: 'mufhem' | 'mustafhem' } */
+exports.switchAccountMode = onCall(async (request) => {
+  const uid = reqUid(request);
+  const role = request.data?.role === 'mufhem' ? 'mufhem' : 'mustafhem';
+  const ref = db.collection('users').doc(uid);
+  const cur = (await ref.get()).data() || {};
+  if (cur.role === 'admin') throw new HttpsError('failed-precondition', 'حساب الأدمن لا يُحوَّل');
+  await ref.set({ role, mode: role === 'mufhem' ? 'mofahhem' : 'mostafhem', accountType: role === 'mufhem' ? 'mofahhem' : 'mostafhem', updatedAt: FV.serverTimestamp() }, { merge: true });
+  return { ok: true, role };
+});

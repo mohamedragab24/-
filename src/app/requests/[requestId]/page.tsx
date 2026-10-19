@@ -89,7 +89,7 @@ export default function RequestDetailsPage() {
   if (!request) return <div className="p-20 text-center font-bold text-red-500">الاستفهام غير موجود.</div>;
 
   const isOwner = currentUser?.uid === request.mustafhemId;
-  const isMufhem = profile?.role === 'mufhem' || profile?.mode === 'mofahhem' || profile?.accountType === 'mofahhem';
+  const isMufhem = profile?.role === 'mufhem' || (!['mufhem','mustafhem','admin'].includes(profile?.role) && (profile?.mode === 'mofahhem' || profile?.accountType === 'mofahhem'));
   const normG = (g: any) => { const v = String(g || '').trim().toLowerCase(); if (!v) return ''; if (v.startsWith('f') || v.includes('أنث') || v.includes('انث')) return 'female'; if (v.startsWith('m') || v.includes('ذكر')) return 'male'; return ''; };
   const genderBlocked = !!(normG(profile?.gender) && normG(ownerProfile?.gender) && normG(profile?.gender) !== normG(ownerProfile?.gender));
   const myOffer = offers?.find((o: any) => o.mufhemId === currentUser?.uid);

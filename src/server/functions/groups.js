@@ -724,3 +724,122 @@ exports.payGroupBills = onCall(async (request) => {
   if (r.remaining > 0) throw new HttpsError('failed-precondition', 'رصيدك لا يكفي لسداد كل الفواتير، اشحن رصيدك أولًا');
   return { ok: true, paid: r.paid };
 });
+
+// ============================ دعوات وطلبات الانضمام ============================
+const cleanIds = (arr) => [...new Set((Array.isArray(arr) ? arr : []).map((x) => String(x || '').trim().toLowerCase()).filter(Boolean))].slice(0, 300);
+const JOIN_BASE = 'https://www.fahemt.online';
+
+async function assertCanAddStudents(g) {
+  if (Number(g.contentCount || 0) > 0 || Number(g.storageBytes || 0) > 0) {
+    const balance = await walletBalance(g.ownerUid);
+    if (balance < MIN_PREPAID) throw new HttpsError('failed-precondition', `لإضافة طلاب بعد رفع المحتوى اشحن رصيدك ${MIN_PREPAID} جنيه على الأقل (رصيدك ${balance} جنيه)`);
+  }
+}
+
+/** يحوّل أرقام تعريفية إلى أسماء ليؤكدها منشئ المجموعة قبل الإرسال. */
+exports.resolveGroupInvitees = onCall(async (request) => {
+  const uid = reqUid(request);
+  const { ref, g } = await loadManageableGroup(uid, request.data?.groupId, 'addStudents');
+  const out = [];
+  for (const pid of cleanIds(request.data?.publicIds)) {
+    if (!/^[0-9a-z]{8}$/.test(pid)) { out.push({ publicId: pid, found: false, reason: 'صيغة الرقم غير صحيحة' }); continue; }
+    const s = await db.collection('publicIds').doc(pid).get();
+    if (!s.exists) { out.push({ publicId: pid, found: false, reason: 'لا يوجد مستخدم بهذا الرقم' }); continue; }
+    const toUid = String(s.data().uid);
+    const u = (await db.collection('users').doc(toUid).get()).data() || {};
+    const member = (await ref.collection('members').doc(toUid).get()).exists;
+    out.push({ publicId: pid, found: true, name: String(u.name || u.fullName || ''), alreadyMember: member || toUid === g.ownerUid });
+  }
+  return { items: out };
+});
+
+/** يرسل دعوات لعدة طلاب مرة واحدة. data: { groupId, publicIds: [] } */
+exports.sendGroupInvites = onCall(async (request) => {
+  const uid = reqUid(request);
+  const { ref, g, id } = await loadManageableGroup(uid, request.data?.groupId, 'addStudents');
+  const ids = cleanIds(request.data?.publicIds);
+  if (!ids.length) throw new HttpsError('invalid-argument', 'لا توجد أرقام تعريفية');
+  await assertCanAddStudents(g);
+  const sent = []; const skipped = [];
+  for (const pid of ids) {
+    try {
+      const s = /^[0-9a-z]{8}$/.test(pid) ? await db.collection('publicIds').doc(pid).get() : null;
+      if (!s || !s.exists) { skipped.push({ publicId: pid, reason: 'غير موجود' }); continue; }
+      const toUid = String(s.data().uid);
+      if (toUid === g.ownerUid || (await ref.collection('members').doc(toUid).get()).exists) { skipped.push({ publicId: pid, reason: 'عضو بالفعل' }); continue; }
+      const u = (await db.collection('users').doc(toUid).get()).data() || {};
+      await db.collection('groupInvites').doc(`${id}_${toUid}`).set({
+        groupId: id, groupName: g.name, ownerUid: g.ownerUid, ownerName: g.ownerName || '',
+        toUid, toPublicId: pid, toName: String(u.name || u.fullName || ''), status: 'pending', createdAt: FV.serverTimestamp(),
+      });
+      await notify(toUid, 'دعوة للانضمام إلى مجموعة', `${g.ownerName || 'مُفهم'} يدعوك للانضمام إلى مجموعة «${g.name}»`, { type: 'group_invite', groupId: id }, `ginvite_${id}`);
+      sent.push({ publicId: pid, name: String(u.name || u.fullName || '') });
+    } catch (e) { skipped.push({ publicId: pid, reason: 'تعذر الإرسال' }); }
+  }
+  return { ok: true, sent, skipped };
+});
+
+/** رابط المجموعة: يرسله المنشئ للطلاب فيقدّمون طلب انضمام. */
+exports.getGroupJoinLink = onCall(async (request) => {
+  const uid = reqUid(request);
+  const { ref, g, id } = await loadManageableGroup(uid, request.data?.groupId, 'addStudents');
+  let code = String(g.joinCode || '');
+  if (!code) {
+    code = require('crypto').randomBytes(6).toString('hex');
+    await ref.update({ joinCode: code });
+    await db.collection('groupJoinCodes').doc(code).set({ groupId: id });
+  }
+  return { code, url: `${JOIN_BASE}/join/${code}` };
+});
+
+/** الطالب يفتح رابط المجموعة ويقدّم طلب انضمام. data: { code } */
+exports.requestJoinGroup = onCall(async (request) => {
+  const uid = reqUid(request);
+  const code = String(request.data?.code || '').trim().toLowerCase();
+  const c = code ? await db.collection('groupJoinCodes').doc(code).get() : null;
+  if (!c || !c.exists) throw new HttpsError('not-found', 'رابط المجموعة غير صالح');
+  const gid = c.data().groupId;
+  const ref = db.collection('groups').doc(gid);
+  const g = (await ref.get()).data();
+  if (!g) throw new HttpsError('not-found', 'المجموعة لم تعد موجودة');
+  if (g.status === 'frozen') throw new HttpsError('failed-precondition', 'المجموعة متوقفة مؤقتًا');
+  if (g.ownerUid === uid || (await ref.collection('members').doc(uid).get()).exists) return { ok: true, already: true, groupName: g.name };
+  const me = (await db.collection('users').doc(uid).get()).data() || {};
+  const publicId = await ensurePublicIdFor(uid);
+  await ref.collection('joinRequests').doc(uid).set({ uid, publicId, name: String(me.name || me.fullName || ''), status: 'pending', createdAt: FV.serverTimestamp() });
+  await notify(g.ownerUid, 'طلب انضمام لمجموعتك', `${String(me.name || me.fullName || 'طالب')} (${publicId}) يطلب الانضمام إلى «${g.name}»`, { type: 'group_join_request', groupId: gid });
+  return { ok: true, groupName: g.name };
+});
+
+exports.listGroupJoinRequests = onCall(async (request) => {
+  const uid = reqUid(request);
+  const { ref } = await loadManageableGroup(uid, request.data?.groupId, 'addStudents', { requireActive: false });
+  const snap = await ref.collection('joinRequests').where('status', '==', 'pending').get();
+  return { items: snap.docs.map((d) => ({ uid: d.id, publicId: d.data().publicId || '', name: d.data().name || '' })) };
+});
+
+/** قبول/رفض طلب انضمام. data: { groupId, uid, accept } */
+exports.respondJoinRequest = onCall(async (request) => {
+  const uid = reqUid(request);
+  const { ref, g, id } = await loadManageableGroup(uid, request.data?.groupId, 'addStudents');
+  const target = String(request.data?.uid || '').trim();
+  const accept = request.data?.accept === true;
+  const reqRef = ref.collection('joinRequests').doc(target);
+  const rs = await reqRef.get();
+  if (!rs.exists || rs.data().status !== 'pending') throw new HttpsError('failed-precondition', 'الطلب غير موجود أو تمت معالجته');
+  if (!accept) { await reqRef.update({ status: 'declined' }); return { ok: true }; }
+  await assertCanAddStudents(g);
+  const u = (await db.collection('users').doc(target).get()).data() || {};
+  await db.runTransaction(async (t) => {
+    const memberRef = ref.collection('members').doc(target);
+    const ms = await t.get(memberRef);
+    if (!ms.exists) {
+      t.set(memberRef, { uid: target, name: String(u.name || u.fullName || ''), publicId: String(rs.data().publicId || ''), joinedAt: FV.serverTimestamp() });
+      t.update(ref, { memberCount: FV.increment(1) });
+    }
+    t.set(db.collection('users').doc(target).collection('groupMemberships').doc(id), { groupId: id, groupName: g.name, ownerUid: g.ownerUid, joinedAt: FV.serverTimestamp() });
+    t.update(reqRef, { status: 'accepted' });
+  });
+  await notify(target, 'تم قبولك في المجموعة', `تم قبول انضمامك إلى «${g.name}»`, { type: 'group_joined', groupId: id });
+  return { ok: true };
+});

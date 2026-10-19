@@ -83,7 +83,7 @@ export function AppSidebar() {
     const targetRole = isMufhem ? "mustafhem" : "mufhem";
     setIsTogglingRole(true);
     try {
-      await updateDoc(userRef, { role: targetRole });
+      await updateDoc(userRef, { role: targetRole, mode: targetRole === 'mufhem' ? 'mofahhem' : 'mostafhem' });
       toast({
         title: targetRole === "mufhem" ? "تم التحويل إلى وضع المُفهم" : "تم التحويل إلى وضع المُستفهم",
         description: targetRole === "mufhem" 

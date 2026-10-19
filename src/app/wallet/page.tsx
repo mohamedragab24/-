@@ -61,7 +61,7 @@ function WalletContent() {
     : (Number.isFinite(legacyBalance) ? legacyBalance : ledgerBalance);
 
   // مفهّم = role mufhem أو mode mofahhem (الحقل يختلف بين الحسابات القديمة والجديدة)
-  const isMufhem = profile?.role === 'mufhem' || profile?.mode === 'mofahhem' || profile?.accountType === 'mofahhem';
+  const isMufhem = profile?.role === 'mufhem' || (!['mufhem','mustafhem','admin'].includes(profile?.role) && (profile?.mode === 'mofahhem' || profile?.accountType === 'mofahhem'));
 
   const handleTransaction = async () => {
     if (!user || !amount || !profile) return;
