@@ -180,7 +180,7 @@ export default function TeachersPage() {
             <div className="p-8 space-y-8">
               <div className="flex items-center gap-6 p-6 bg-zinc-50 rounded-3xl">
                 <Avatar className="h-28 w-28 border-4 border-white shadow-md">
-                  <AvatarImage src={selectedTeacher??.profilePictureUrl || (selectedTeacher??.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
+                  <AvatarImage src={selectedTeacher?.profilePictureUrl || (selectedTeacher?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                   <AvatarFallback className="text-4xl">{selectedTeacher?.fullName?.charAt(0)}</AvatarFallback>
                 </Avatar>
                 <div className="text-right flex-1">

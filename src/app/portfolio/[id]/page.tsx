@@ -124,7 +124,7 @@ export default function PortfolioItemDetails() {
             <Card className="rounded-[2.5rem] border-none shadow-2xl bg-white overflow-hidden p-8 space-y-8">
               <div className="text-center space-y-4">
                 <Avatar className="h-28 w-28 border-4 border-primary/10 shadow-xl mx-auto">
-                  <AvatarImage src={teacher??.profilePictureUrl || (teacher??.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
+                  <AvatarImage src={teacher?.profilePictureUrl || (teacher?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                   <AvatarFallback className="text-3xl font-black bg-primary/10 text-primary">{teacher?.fullName?.charAt(0)}</AvatarFallback>
                 </Avatar>
                 <div className="space-y-1">

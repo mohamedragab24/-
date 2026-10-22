@@ -193,7 +193,7 @@ export default function GlobalPortfolioPage() {
 
                   <div className="absolute bottom-4 right-4">
                     <Avatar className="h-16 w-16 border-[6px] border-white shadow-2xl transition-transform group-hover:scale-110">
-                      <AvatarImage src={teacher??.profilePictureUrl || (teacher??.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
+                      <AvatarImage src={teacher?.profilePictureUrl || (teacher?.gender === "female" ? "/avatars/avatar_female.jpg" : "/avatars/avatar_male.jpg")} />
                       <AvatarFallback className="bg-primary/10 text-primary font-black text-xl">{teacher?.fullName?.charAt(0)}</AvatarFallback>
                     </Avatar>
                   </div>
