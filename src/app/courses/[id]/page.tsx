@@ -437,6 +437,11 @@ export default function CourseDetailPage() {
                   <div className="text-3xl font-black text-primary font-mono">
                     {course.price} <span className="text-base font-sans font-bold text-zinc-700">ج.م</span>
                   </div>
+                  <div className="text-sm font-black text-zinc-600 pt-1">
+                    {(course as any).validityValue && !(course as any).lifetime
+                      ? `صلاحية الكورس: ${(course as any).validityValue} ${({ day: "يوم", month: "شهر", year: "سنة" } as any)[(course as any).validityUnit] || ""}`
+                      : "صلاحية الكورس: مدى الحياة"}
+                  </div>
                 </div>
 
                 <Button

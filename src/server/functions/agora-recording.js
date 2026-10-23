@@ -48,7 +48,7 @@ async function call(c, path, body) {
 }
 
 /** يبدأ التسجيل (يُستدعى عند بدء جلسة مسجلة). يرجّع الحالة المطلوب حفظها على الجلسة. */
-async function startRecording({ channel, groupId }) {
+async function startRecording({ channel, groupId, prefix }) {
   const c = cfg();
   const miss = missing(c);
   if (miss.length) throw new Error(`إعدادات التسجيل ناقصة في Vercel: ${miss.join(', ')}`);
@@ -76,7 +76,7 @@ async function startRecording({ channel, groupId }) {
         bucket: c.bucket,
         accessKey: c.r2Key,
         secretKey: c.r2Secret,
-        fileNamePrefix: ['groups', groupId, 'recordings'],
+        fileNamePrefix: prefix || ['groups', groupId, 'recordings'],
         extensionParams: { endpoint: `${c.r2Account}.r2.cloudflarestorage.com` },
       },
     },

@@ -160,6 +160,20 @@ export default function RequestDetailsPage() {
                   </div>
                 )}
 
+                {(isOwner || (currentUser && request.mufhemId === currentUser.uid)) && (request.status === 'paid' || request.status === 'completed') && (
+                  <div className="pt-4">
+                    <Button variant="ghost" className="font-black text-red-600" onClick={async () => {
+                      const text = window.prompt("اكتب تفاصيل الشكوى على الجلسة (سيراجعها فريق الإدارة مع تسجيل الجلسة):");
+                      if (!text || text.trim().length < 5) return;
+                      try {
+                        const { firebaseApp } = initializeFirebase();
+                        await httpsCallable(getFunctions(firebaseApp, "us-central1"), "fileSessionComplaint")({ requestId, text: text.trim() });
+                        toast({ title: "تم إرسال الشكوى للإدارة" });
+                      } catch (e: any) { toast({ variant: "destructive", title: "تعذر إرسال الشكوى", description: e?.message }); }
+                    }}>تقديم شكوى على الجلسة</Button>
+                  </div>
+                )}
+
                 {isOwner && request.status === 'paid' && (
                   <div className="pt-6">
                     <Button variant="outline" className="w-full h-14 rounded-2xl font-black" onClick={async () => {

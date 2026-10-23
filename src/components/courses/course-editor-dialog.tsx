@@ -95,6 +95,10 @@ export function CourseEditorDialog({
   const [category, setCategory] = useState(courseToEdit?.category || "البرمجة والتقنية");
   const [isPublished, setIsPublished] = useState<boolean>(courseToEdit ? courseToEdit.isPublished : false);
   const [purchaseEnabled, setPurchaseEnabled] = useState<boolean>(courseToEdit ? courseToEdit.purchaseEnabled !== false : true);
+  // صلاحية الكورس: رقم 1–100 + وحدة (يوم/شهر/سنة) أو مدى الحياة
+  const [lifetime, setLifetime] = useState<boolean>(courseToEdit ? (courseToEdit as any).lifetime !== false && !(courseToEdit as any).validityValue ? true : !!(courseToEdit as any).lifetime : false);
+  const [validityValue, setValidityValue] = useState<number>((courseToEdit as any)?.validityValue || 6);
+  const [validityUnit, setValidityUnit] = useState<string>((courseToEdit as any)?.validityUnit || "month");
   
   // Lessons list
   const [lessons, setLessons] = useState<CourseLesson[]>(courseToEdit?.lessons || []);
@@ -131,6 +135,9 @@ export function CourseEditorDialog({
       setCategory(courseToEdit.category || "البرمجة والتقنية");
       setIsPublished(courseToEdit.isPublished);
       setPurchaseEnabled(courseToEdit.purchaseEnabled !== false);
+      setLifetime(!(courseToEdit as any).validityValue || !!(courseToEdit as any).lifetime);
+      setValidityValue((courseToEdit as any).validityValue || 6);
+      setValidityUnit((courseToEdit as any).validityUnit || "month");
       setLessons((courseToEdit.lessons || []).map((lesson, index) => ({ ...lesson, order: index + 1, title: withLessonNumber(lesson.title, index + 1) })));
     } else {
       setTitle("");
@@ -347,6 +354,11 @@ export function CourseEditorDialog({
       isPublished: courseToEdit ? (canManagePublication ? isPublished : courseToEdit.isPublished) : false,
       status: courseToEdit ? ((canManagePublication ? isPublished : courseToEdit.isPublished) ? "published" : "pending") : "pending",
       purchaseEnabled,
+      ...( {
+        lifetime,
+        validityValue: lifetime ? 0 : Math.min(100, Math.max(1, Math.floor(Number(validityValue) || 1))),
+        validityUnit: lifetime ? "" : validityUnit,
+      } as any ),
       category,
       createdAt: courseToEdit?.createdAt || new Date().toISOString(),
       totalEnrollments: courseToEdit?.totalEnrollments || 0,
@@ -452,6 +464,24 @@ export function CourseEditorDialog({
                   className="h-12 rounded-xl font-bold font-mono"
                 />
               </div>
+            </div>
+
+            <div className="space-y-3 text-right rounded-2xl border-2 p-4">
+              <div className="flex items-center justify-between">
+                <Label className="font-black text-zinc-700">صلاحية الكورس: {lifetime ? "مدى الحياة" : "مدة محددة"}</Label>
+                <Switch checked={lifetime} onCheckedChange={setLifetime} />
+              </div>
+              {!lifetime && (
+                <div className="flex gap-3">
+                  <Input type="number" min={1} max={100} value={validityValue} onChange={(e) => setValidityValue(Math.min(100, Math.max(1, Number(e.target.value) || 1)))} className="h-12 rounded-xl font-bold font-mono w-32" />
+                  <select value={validityUnit} onChange={(e) => setValidityUnit(e.target.value)} className="h-12 rounded-xl border-2 px-3 font-bold bg-white">
+                    <option value="day">يوم</option>
+                    <option value="month">شهر</option>
+                    <option value="year">سنة</option>
+                  </select>
+                </div>
+              )}
+              <p className="text-xs font-bold text-zinc-500">تظهر المدة للطلاب قبل الشراء، ويبدأ العدّ التنازلي من لحظة الشراء.</p>
             </div>
 
             {/* تصنيف الكورس */}

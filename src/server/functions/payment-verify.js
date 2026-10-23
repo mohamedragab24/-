@@ -301,6 +301,8 @@ async function confirmPaymentWithTx(paymentId, txDocId, opts = {}) {
   if (outcome === 'duplicate') return { ok: false, duplicate: true };
   if (!confirmed) return { ok: false, duplicate: false };
 
+  if (confirmed.type !== 'wallet_topup' && confirmed.courseId) await require('./course-validity').stampPurchaseExpiry(db, confirmed.uid, confirmed.courseId);
+
   // إشعار داخل التطبيق (الـ triggers لا تعمل على Vercel، لذا نكتب الإشعار هنا)
   try {
     const isTopup = confirmed.type === 'wallet_topup';

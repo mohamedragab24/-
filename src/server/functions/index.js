@@ -82,7 +82,11 @@ const healPurchase = async (uid, courseId, extra) => {
 /** مصدر واحد لحقيقة الاشتراك: نفس منطق التطبيق (purchases ← القديم ← payments المكتملة). */
 const hasEntitlement = async (uid, courseId) => {
   const main = await db.collection('purchases').doc(`${uid}_${courseId}`).get();
-  if (main.exists && main.data()?.status === 'completed') return true;
+  if (main.exists && main.data()?.status === 'completed') {
+    const exp = main.data()?.expiresAt;
+    if (typeof exp === 'number' && exp > 0 && Date.now() > exp) return false; // انتهت صلاحية الكورس
+    return true;
+  }
   const legacy = await db.collection('users').doc(uid).collection('purchases').doc(courseId).get();
   if (legacy.exists && !['cancelled', 'refunded'].includes(String(legacy.data()?.status || ''))) {
     await healPurchase(uid, courseId, { source: 'legacy' });
@@ -417,6 +421,7 @@ exports.purchaseCourse = onCall(async (request) => {
       tx.set(purchaseRef, { uid, courseId, status: 'completed', amountPaid: amount, paymentId: paymentRef.id, orderNumber, paymentMethod: 'wallet', source: common.source, purchasedAt: now, updatedAt: now }, { merge: true });
     });
 
+    await require('./course-validity').stampPurchaseExpiry(db, uid, courseId);
     const afterPurchase = await purchaseRef.get();
     if (afterPurchase.exists && afterPurchase.data()?.status === 'completed') {
       return { ok: true, alreadyPurchased: false, paymentId: afterPurchase.data()?.paymentId || paymentRef.id, orderNumber: afterPurchase.data()?.orderNumber || orderNumber, amountPaid: Number(afterPurchase.data()?.amountPaid || amount) };
@@ -469,7 +474,7 @@ exports.getMyPurchasedCourseIds = onCall({ secrets: R2_SECRETS }, async (request
   if (!uid) return { courseIds: [], source: 'anonymous' };
   try {
     const snap = await db.collection('purchases').where('uid', '==', uid).where('status', '==', 'completed').get();
-    const ids = snap.docs.map(d => String(d.data()?.courseId || '')).filter(Boolean);
+    const ids = snap.docs.filter(d => { const e = d.data()?.expiresAt; return !(typeof e === 'number' && e > 0 && Date.now() > e); }).map(d => String(d.data()?.courseId || '')).filter(Boolean);
     const legacy = await db.collection('users').doc(uid).collection('purchases').get();
     legacy.docs.forEach(d => { if (!['cancelled', 'refunded'].includes(String(d.data()?.status || ''))) ids.push(String(d.data()?.courseId || d.id)); });
     const pays = await db.collection('payments').where('uid', '==', uid).where('status', '==', 'completed').get();
@@ -1044,3 +1049,4 @@ Object.assign(exports, require('./system-check'));
 Object.assign(exports, require('./app-updates'));
 Object.assign(exports, require('./security'));
 Object.assign(exports, require('./istifham'));
+Object.assign(exports, require('./session'));
