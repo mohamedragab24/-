@@ -27,7 +27,11 @@ exports.getMyIp = onCall(async (request) => {
   const get = (k) => (h && typeof h.get === 'function' ? h.get(k) : h?.[k]) || '';
   const fwd = String(get('x-forwarded-for') || '').split(',')[0].trim();
   const ip = fwd || String(get('x-real-ip') || '').trim();
-  return { ip };
+  // سجل للإدارة: IP + التوقيت (يُستدعى عند فتح المحتوى المحمي)
+  if (request.auth?.uid && ip) {
+    db.collection('ipLogs').add({ uid: request.auth.uid, ip, at: FV.serverTimestamp(), ua: String(get('user-agent') || '').slice(0, 200) }).catch(() => {});
+  }
+  return { ip, serverNow: Date.now() };
 });
 
 // ------------------------------------------------------------------ تقييم الجلسة
@@ -69,6 +73,23 @@ exports.submitSessionRating = onCall(async (request) => {
 });
 
 // ------------------------------------------------------------------ تسجيل جلسات الاستفهام
+/** يتأكد فعليًا أن الملف موجود في R2 (HEAD) قبل اعتبار التسجيل مكتملًا. */
+async function r2FileExists(key) {
+  try {
+    const signed = presignedUrl({ method: 'HEAD', key, expiresSeconds: 120 });
+    const res = await fetch(signed.url, { method: 'HEAD' });
+    const len = Number(res.headers.get('content-length') || 0);
+    return res.ok && len > 1024;
+  } catch (_) { return false; }
+}
+async function waitForFile(key, tries = 5, delayMs = 3000) {
+  for (let i = 0; i < tries; i++) {
+    if (await r2FileExists(key)) return true;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return false;
+}
+
 async function loadParticipantRequest(uid, requestId) {
   const ref = db.collection('istifhams').doc(requestId);
   const s = await ref.get();
@@ -114,7 +135,9 @@ exports.setSessionRetention = onCall(async (request) => {
   const { ref, r } = await loadParticipantRequest(uid, requestId);
   const side = uid === r.mustafhemId ? 'mustafhem' : uid === r.mufhemId ? 'mufhem' : null;
   if (!side) throw new HttpsError('permission-denied', 'لأطراف الجلسة فقط');
-  await ref.update({ [`retention.${side}`]: days });
+  if (r.recordingStopped) throw new HttpsError('failed-precondition', 'انتهت الجلسة ولا يمكن تغيير الاختيار الآن');
+  // كل طرف يكتب اختياره فقط (مع وقت الموافقة)، ولا يملك تغيير اختيار الطرف الآخر
+  await ref.update({ [`retention.${side}`]: days, [`retentionAt.${side}`]: Date.now(), [`retentionBy.${side}`]: uid });
   return { ok: true };
 });
 
@@ -131,18 +154,46 @@ exports.endIstifhamRecording = onCall(async (request) => {
   const ret = r.retention || {};
   const agreed = ret.mustafhem && ret.mufhem && ret.mustafhem === ret.mufhem ? Number(ret.mustafhem) : 0;
   const now = Date.now();
-  const doc = {
+  const key = mp4 && mp4.startsWith(`sessions/${requestId}/`) ? mp4 : '';
+  const base = {
     requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, title: String(r.title || ''),
-    r2Key: mp4 && mp4.startsWith(`sessions/${requestId}/`) ? mp4 : '',
-    status: mp4 ? 'ready' : 'failed', error: mp4 ? '' : (error || 'لم يُنتج ملف تسجيل'),
-    createdAt: FV.serverTimestamp(), complaint: false,
-    // للإدارة فقط: يوما واحدا + يوم احتياطي، ويُحذف تلقائيًا إلا لو قُدّمت شكوى
-    adminExpiresAt: now + 2 * DAY,
-    studentSaveDays: agreed,
-    studentExpiresAt: agreed ? now + agreed * DAY : 0,
+    r2Key: key, createdAt: FV.serverTimestamp(), complaint: false,
+    adminExpiresAt: now + 2 * DAY, // للإدارة فقط: يومان ثم حذف تلقائي (14 يومًا كحد أقصى لو فيه شكوى)
+    studentSaveDays: agreed, studentExpiresAt: agreed ? now + agreed * DAY : 0,
+    consent: { mustafhem: { days: ret.mustafhem || 0, at: r.retentionAt?.mustafhem || 0 }, mufhem: { days: ret.mufhem || 0, at: r.retentionAt?.mufhem || 0 } },
   };
-  await db.collection('sessionRecordings').doc(requestId).set(doc, { merge: true });
-  return { ok: true, saved: !!agreed };
+  if (!key) {
+    await db.collection('sessionRecordings').doc(requestId).set({ ...base, status: 'failed', error: error || 'لم يُنتج ملف تسجيل' }, { merge: true });
+    return { ok: false, status: 'failed' };
+  }
+  await db.collection('sessionRecordings').doc(requestId).set({ ...base, status: 'processing', error: '' }, { merge: true });
+  // لا نعتبر التسجيل مكتملًا إلا بعد التأكد أن الملف موجود في R2 فعلًا
+  const exists = await waitForFile(key);
+  await db.collection('sessionRecordings').doc(requestId).set(exists ? { status: 'ready', error: '' } : { status: 'processing', error: 'الملف لم يظهر في التخزين بعد، سيُعاد الفحص تلقائيًا' }, { merge: true });
+  return { ok: true, saved: !!agreed, status: exists ? 'ready' : 'processing' };
+});
+
+/** الأدمن: إعادة فحص تسجيل لم يكتمل (أو فاشل لو الملف موجود). */
+exports.adminRetrySessionRecording = onCall(async (request) => {
+  const uid = reqUid(request);
+  if (!(await isAdminUid(uid))) throw new HttpsError('permission-denied', 'للأدمن فقط');
+  const requestId = String(request.data?.requestId || '').trim();
+  const ref = db.collection('sessionRecordings').doc(requestId);
+  const d = (await ref.get()).data();
+  if (!d) throw new HttpsError('not-found', 'التسجيل غير موجود');
+  if (!d.r2Key) {
+    // لم يُسجَّل اسم ملف: نحاول إيقاف التسجيل/قراءة الحالة مرة أخرى من الجلسة
+    const r = (await db.collection('istifhams').doc(requestId).get()).data() || {};
+    if (!r.recordingState) throw new HttpsError('failed-precondition', 'لا توجد بيانات تسجيل لهذه الجلسة');
+    let mp4 = null;
+    try { mp4 = (await require('./agora-recording').stopRecording(r.recordingState)).mp4; } catch (e) { throw new HttpsError('unavailable', `تعذر استرجاع التسجيل: ${String(e?.message || e).slice(0, 150)}`); }
+    if (!mp4 || !mp4.startsWith(`sessions/${requestId}/`)) throw new HttpsError('failed-precondition', 'لم يُنتج ملف تسجيل لهذه الجلسة');
+    await ref.update({ r2Key: mp4 });
+    d.r2Key = mp4;
+  }
+  const exists = await r2FileExists(d.r2Key);
+  await ref.update(exists ? { status: 'ready', error: '' } : { status: 'failed', error: 'الملف غير موجود في التخزين' });
+  return { ok: exists, status: exists ? 'ready' : 'failed' };
 });
 
 /** رابط مشاهدة مؤقت: الأدمن دائمًا، والمستفهم فقط لو اتفق الطرفان على الحفظ ولم تنته المدة. */
@@ -201,6 +252,10 @@ async function cleanupExpiredRecordings() {
     const d = doc.data();
     const adminLive = now < Number(d.adminExpiresAt || 0);
     const studentLive = d.studentSaveDays > 0 && now < Number(d.studentExpiresAt || 0);
+    if (d.status === 'processing' && d.r2Key && adminLive) {
+      if (await r2FileExists(d.r2Key)) await doc.ref.update({ status: 'ready', error: '' });
+      continue;
+    }
     if (!adminLive && !studentLive) {
       if (d.r2Key) { try { await deleteObject(String(d.r2Key)); } catch (e) { console.error('r2 delete failed', e); continue; } }
       await doc.ref.delete();

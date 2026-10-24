@@ -27,6 +27,12 @@ export default function AdminSessionRecordings() {
       setPlayUrl(r.data.url);
     } catch (e: any) { toast({ variant: "destructive", title: "تعذر التشغيل", description: e?.message }); }
   };
+  const retry = async (id: string) => {
+    try {
+      const r: any = await httpsCallable(fns(), "adminRetrySessionRecording")({ requestId: id });
+      toast({ title: r.data?.ok ? "التسجيل جاهز" : "لم يكتمل بعد", description: r.data?.ok ? undefined : "الملف غير موجود في التخزين حتى الآن." });
+    } catch (e: any) { toast({ variant: "destructive", title: "تعذر إعادة المحاولة", description: e?.message }); }
+  };
   const resolve = async (id: string) => {
     try {
       await httpsCallable(fns(), "adminResolveSessionComplaint")({ requestId: id });
@@ -52,13 +58,15 @@ export default function AdminSessionRecordings() {
               <TableRow key={r.id}>
                 <TableCell className="font-bold">{r.title || r.requestId}{r.complaint && r.complaintText && <span className="block text-xs font-bold text-red-600 mt-1">شكوى: {r.complaintText}</span>}</TableCell>
                 <TableCell>
-                  {r.status === "ready" ? <Badge className="bg-green-100 text-green-700">جاهز</Badge> : <Badge className="bg-red-100 text-red-700" title={r.error}>فشل</Badge>}
+                  {r.status === "ready" ? <Badge className="bg-green-100 text-green-700">جاهز</Badge> : r.status === "processing" ? <Badge className="bg-yellow-100 text-yellow-700" title={r.error}>قيد المعالجة</Badge> : <Badge className="bg-red-100 text-red-700" title={r.error}>فشل</Badge>}
+                  {r.status !== "ready" && r.error && <span className="block text-[11px] text-zinc-500 mt-1">{r.error}</span>}
                   {r.complaint && <Badge className="mr-2 bg-orange-100 text-orange-700">شكوى مفتوحة</Badge>}
                 </TableCell>
                 <TableCell>{left(Number(r.adminExpiresAt || 0))}</TableCell>
                 <TableCell>{r.studentSaveDays ? `${r.studentSaveDays} يوم` : "لا"}</TableCell>
                 <TableCell className="space-x-2 space-x-reverse">
                   {r.status === "ready" && <Button size="sm" onClick={() => play(r.id)}>مشاهدة</Button>}
+                  {r.status !== "ready" && <Button size="sm" variant="secondary" onClick={() => retry(r.id)}>إعادة المحاولة</Button>}
                   {r.complaint && <Button size="sm" variant="outline" onClick={() => resolve(r.id)}>تم الرد على الشكوى</Button>}
                 </TableCell>
               </TableRow>
