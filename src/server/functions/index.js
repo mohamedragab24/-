@@ -1050,3 +1050,4 @@ Object.assign(exports, require('./app-updates'));
 Object.assign(exports, require('./security'));
 Object.assign(exports, require('./istifham'));
 Object.assign(exports, require('./session'));
+Object.assign(exports, require('./refunds'));

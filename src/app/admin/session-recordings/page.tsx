@@ -22,8 +22,10 @@ export default function AdminSessionRecordings() {
   const fns = () => getFunctions(initializeFirebase().firebaseApp, "us-central1");
 
   const play = async (id: string) => {
+    const reason = window.prompt("سبب فتح التسجيل (يُسجَّل في سجل المراجعة):", "مراجعة شكوى");
+    if (!reason || !reason.trim()) return;
     try {
-      const r: any = await httpsCallable(fns(), "getSessionRecordingUrl")({ requestId: id });
+      const r: any = await httpsCallable(fns(), "getSessionRecordingUrl")({ requestId: id, reason: reason.trim() });
       setPlayUrl(r.data.url);
     } catch (e: any) { toast({ variant: "destructive", title: "تعذر التشغيل", description: e?.message }); }
   };

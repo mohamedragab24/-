@@ -117,7 +117,7 @@ exports.startIstifhamRecording = onCall(async (request) => {
     });
     if (!lock) return { ok: true, already: true };
     const state = await require('./agora-recording').startRecording({ channel, groupId: `_sessions`, prefix: ['sessions', requestId] });
-    await ref.update({ recordingState: state, recordingStarting: false, recordingStartedAt: FV.serverTimestamp() });
+    await ref.update({ recordingState: state, recordingStarting: false, recordingOpen: true, recordingStartedAt: FV.serverTimestamp(), recordingStartedAtMs: Date.now() });
     return { ok: true };
   } catch (e) {
     console.error('istifham recording start failed', e);
@@ -141,14 +141,18 @@ exports.setSessionRetention = onCall(async (request) => {
   return { ok: true };
 });
 
-/** إنهاء التسجيل وتسجيله في sessionRecordings (للإدارة فقط). يُستدعى عند انتهاء الجلسة من أي طرف. */
-exports.endIstifhamRecording = onCall(async (request) => {
-  const uid = reqUid(request);
-  const requestId = String(request.data?.requestId || '').trim();
-  const { ref, r } = await loadParticipantRequest(uid, requestId);
+/** ينهي التسجيل ويحفظ بياناته (idempotent: لا يُنشئ تسجيلًا مكررًا لنفس الجلسة). */
+async function finalizeIstifhamRecording(ref, r, requestId) {
   const state = r.recordingState;
-  if (!state?.sid || r.recordingStopped) return { ok: true, already: true };
-  await ref.update({ recordingStopped: true });
+  if (!state?.sid) return { ok: true, already: true };
+  // قفل ذري: أول استدعاء فقط ينفّذ الإنهاء
+  const won = await db.runTransaction(async (tx) => {
+    const cur = (await tx.get(ref)).data() || {};
+    if (cur.recordingStopped) return false;
+    tx.update(ref, { recordingStopped: true, recordingOpen: false, recordingEndedAtMs: Date.now() });
+    return true;
+  });
+  if (!won) return { ok: true, already: true };
   let mp4 = null; let error = '';
   try { mp4 = (await require('./agora-recording').stopRecording(state)).mp4; } catch (e) { error = String(e?.message || e).slice(0, 300); }
   const ret = r.retention || {};
@@ -156,21 +160,31 @@ exports.endIstifhamRecording = onCall(async (request) => {
   const now = Date.now();
   const key = mp4 && mp4.startsWith(`sessions/${requestId}/`) ? mp4 : '';
   const base = {
-    requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, title: String(r.title || ''),
-    r2Key: key, createdAt: FV.serverTimestamp(), complaint: false,
+    requestId, sessionId: requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, participants: [r.mustafhemId, r.mufhemId].filter(Boolean),
+    title: String(r.title || ''), r2Key: key,
+    startedAtMs: Number(r.recordingStartedAtMs || 0), endedAtMs: now, createdAt: FV.serverTimestamp(), complaint: false,
     adminExpiresAt: now + 2 * DAY, // للإدارة فقط: يومان ثم حذف تلقائي (14 يومًا كحد أقصى لو فيه شكوى)
     studentSaveDays: agreed, studentExpiresAt: agreed ? now + agreed * DAY : 0,
     consent: { mustafhem: { days: ret.mustafhem || 0, at: r.retentionAt?.mustafhem || 0 }, mufhem: { days: ret.mufhem || 0, at: r.retentionAt?.mufhem || 0 } },
   };
+  const out = db.collection('sessionRecordings').doc(requestId);
   if (!key) {
-    await db.collection('sessionRecordings').doc(requestId).set({ ...base, status: 'failed', error: error || 'لم يُنتج ملف تسجيل' }, { merge: true });
+    await out.set({ ...base, status: 'failed', error: error || 'لم يُنتج ملف تسجيل' }, { merge: true });
     return { ok: false, status: 'failed' };
   }
-  await db.collection('sessionRecordings').doc(requestId).set({ ...base, status: 'processing', error: '' }, { merge: true });
+  await out.set({ ...base, status: 'processing', error: '' }, { merge: true });
   // لا نعتبر التسجيل مكتملًا إلا بعد التأكد أن الملف موجود في R2 فعلًا
   const exists = await waitForFile(key);
-  await db.collection('sessionRecordings').doc(requestId).set(exists ? { status: 'ready', error: '' } : { status: 'processing', error: 'الملف لم يظهر في التخزين بعد، سيُعاد الفحص تلقائيًا' }, { merge: true });
+  await out.set(exists ? { status: 'ready', error: '', savedAtMs: Date.now() } : { status: 'processing', error: 'الملف لم يظهر في التخزين بعد، سيُعاد الفحص تلقائيًا' }, { merge: true });
   return { ok: true, saved: !!agreed, status: exists ? 'ready' : 'processing' };
+}
+
+/** إنهاء التسجيل من أي طرف عند الخروج. */
+exports.endIstifhamRecording = onCall(async (request) => {
+  const uid = reqUid(request);
+  const requestId = String(request.data?.requestId || '').trim();
+  const { ref, r } = await loadParticipantRequest(uid, requestId);
+  return finalizeIstifhamRecording(ref, r, requestId);
 });
 
 /** الأدمن: إعادة فحص تسجيل لم يكتمل (أو فاشل لو الملف موجود). */
@@ -207,6 +221,11 @@ exports.getSessionRecordingUrl = onCall(async (request) => {
   const studentOk = uid === d.mustafhemId && d.studentSaveDays > 0 && Date.now() < Number(d.studentExpiresAt || 0);
   if (!adm && !studentOk) throw new HttpsError('permission-denied', 'هذا التسجيل غير متاح لك');
   const me = (await db.collection('users').doc(uid).get()).data() || {};
+  // سجل مراجعة: من فتح التسجيل ومتى ولماذا
+  await db.collection('sessionRecordingAccess').add({
+    requestId, uid, role: adm ? 'admin' : 'student', reason: String(request.data?.reason || (adm ? 'مراجعة إدارية' : 'مشاهدة النسخة المحفوظة')).slice(0, 300),
+    complaintOpen: d.complaint === true, at: FV.serverTimestamp(),
+  });
   const signed = presignedUrl({ method: 'GET', key: String(d.r2Key), expiresSeconds: 900 });
   return { ...signed, watermark: { uid, name: String(me.name || me.fullName || ''), publicId: String(me.publicId || '') } };
 });
@@ -246,6 +265,15 @@ exports.adminResolveSessionComplaint = onCall(async (request) => {
 /** تنظيف المنتهي (يستدعيها الـ cron اليومي). */
 async function cleanupExpiredRecordings() {
   const now = Date.now();
+  // جلسات انقطعت دون إنهاء (إغلاق التطبيق/انقطاع الإنترنت): نُنهي تسجيلها بعد 45 دقيقة من البدء
+  let finalized = 0;
+  const open = await db.collection('istifhams').where('recordingOpen', '==', true).get();
+  for (const doc of open.docs) {
+    const r = doc.data();
+    if (now - Number(r.recordingStartedAtMs || 0) > 45 * 60 * 1000) {
+      try { await finalizeIstifhamRecording(doc.ref, r, doc.id); finalized++; } catch (e) { console.error('finalize abandoned failed', doc.id, e); }
+    }
+  }
   const snap = await db.collection('sessionRecordings').get();
   let removed = 0; let trimmed = 0;
   for (const doc of snap.docs) {
@@ -256,14 +284,18 @@ async function cleanupExpiredRecordings() {
       if (await r2FileExists(d.r2Key)) await doc.ref.update({ status: 'ready', error: '' });
       continue;
     }
+    // لا نحذف تسجيلًا مرتبطًا بشكوى مفتوحة قبل انتهاء حدّ الـ 14 يومًا
+    const created = d.createdAt?.toMillis ? d.createdAt.toMillis() : 0;
+    if (d.complaint === true && created && now < created + 14 * DAY) continue;
     if (!adminLive && !studentLive) {
       if (d.r2Key) { try { await deleteObject(String(d.r2Key)); } catch (e) { console.error('r2 delete failed', e); continue; } }
+      await db.collection('recordingDeletionLogs').add({ requestId: doc.id, reason: d.complaint ? 'complaint_period_ended' : 'retention_expired', at: FV.serverTimestamp(), hadStudentCopy: !!d.studentSaveDays });
       await doc.ref.delete();
       removed++;
     } else if (!adminLive && studentLive) {
       trimmed++; // الإدارة انتهت مدتها لكن المستفهم لسه محتفظ بنسخة: الملف يبقى حتى انتهاء مدة المستفهم
     }
   }
-  return { removed, trimmed };
+  return { removed, trimmed, finalized };
 }
 exports._cleanupExpiredRecordings = cleanupExpiredRecordings;

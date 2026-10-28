@@ -27,7 +27,8 @@ async function stampPurchaseExpiry(db, uid, courseId) {
     const [p, c] = [await pRef.get(), await db.collection('courses').doc(courseId).get()];
     if (!p.exists || p.data().expiresAtStamped === true) return;
     const exp = computeExpiry(c.data() || {}, Date.now());
-    await pRef.set({ expiresAt: exp, expiresAtStamped: true }, { merge: true });
+    // purchasedAtMs = وقت إتمام الشراء من الخادم (أساس مهلة الاسترداد 24 ساعة وبداية الصلاحية)
+    await pRef.set({ expiresAt: exp, expiresAtStamped: true, purchasedAtMs: Number(p.data().purchasedAtMs) || Date.now() }, { merge: true });
   } catch (e) { console.error('stampPurchaseExpiry failed', e); }
 }
 

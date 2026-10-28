@@ -444,6 +444,18 @@ export default function CourseDetailPage() {
                   </div>
                 </div>
 
+                {isEnrolled && (
+                  <Button variant="outline" className="w-full font-black text-red-600" onClick={async () => {
+                    const reason = window.prompt("طلب إلغاء الاشتراك واسترداد المبلغ (متاح خلال 24 ساعة من الشراء). اكتب السبب (اختياري):");
+                    if (reason === null) return;
+                    try {
+                      const { firebaseApp } = initializeFirebase();
+                      await httpsCallable(getFunctions(firebaseApp, "us-central1"), "requestCourseRefund")({ courseId: (course as any).id || rawCourseRoute, reason });
+                      toast({ title: "تم إرسال طلب الاسترداد", description: "سيراجعه فريق الإدارة وتظهر لك الحالة." });
+                    } catch (e: any) { toast({ variant: "destructive", title: "تعذر إرسال الطلب", description: e?.message }); }
+                  }}>طلب إلغاء الاشتراك واسترداد المبلغ</Button>
+                )}
+
                 <Button
                   onClick={() => setPurchaseOpen(true)}
                   disabled={course.purchaseEnabled === false}

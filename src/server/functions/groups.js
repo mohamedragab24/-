@@ -494,8 +494,12 @@ exports.endGroupSession = onCall(async (request) => {
     else await lRef.set(meta, { merge: true });
     if (agoraResult) {
       if (agoraResult.mp4 && agoraResult.mp4.startsWith(`groups/${ref.id}/`)) {
-        await rRef.set({ r2Key: agoraResult.mp4, status: 'ready', source: 'agora' }, { merge: true });
-        await lRef.set({ r2Key: agoraResult.mp4, status: 'ready', source: 'agora', readyAt: FV.serverTimestamp() }, { merge: true });
+        // لا نعتبر الجلسة محفوظة إلا بعد التأكد أن الملف موصول في R2 فعلًا
+        const exists = await require('./agora-recording').fileExists(agoraResult.mp4);
+        const st = exists ? 'ready' : 'processing';
+        const err = exists ? '' : 'الملف لم يظهر في التخزين بعد';
+        await rRef.set({ r2Key: agoraResult.mp4, status: st, error: err, source: 'agora', endedAtMs: Date.now() }, { merge: true });
+        await lRef.set({ r2Key: agoraResult.mp4, status: st, error: err, source: 'agora', readyAt: exists ? FV.serverTimestamp() : null }, { merge: true });
       } else {
         const why = agoraResult.error || (agoraResult.files?.length ? 'لم يُنتج ملف mp4 (تم إنتاج HLS فقط)' : 'لم يُسجَّل أي صوت أو فيديو في الجلسة');
         await rRef.set({ status: 'failed', error: why }, { merge: true });

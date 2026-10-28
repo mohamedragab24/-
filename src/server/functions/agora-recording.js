@@ -98,4 +98,18 @@ async function stopRecording(state) {
   return { mp4, files: names };
 }
 
-module.exports = { startRecording, stopRecording };
+/** يتأكد فعليًا أن الملف موجود في R2 (HEAD) وحجمه معقول، مع إعادة المحاولة. */
+async function fileExists(key, tries = 5, delayMs = 3000) {
+  const { presignedUrl } = require('./r2');
+  for (let i = 0; i < tries; i++) {
+    try {
+      const signed = presignedUrl({ method: 'HEAD', key, expiresSeconds: 120 });
+      const res = await fetch(signed.url, { method: 'HEAD' });
+      if (res.ok && Number(res.headers.get('content-length') || 0) > 1024) return true;
+    } catch (_) {}
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return false;
+}
+
+module.exports = { startRecording, stopRecording, fileExists };
