@@ -37,14 +37,20 @@ async function call(c, path, body, tries = 4) {
   let last;
   for (let i = 0; i < tries; i++) {
     try { return await callOnce(c, path, body); }
-    catch (e) { last = e; if (!isTransient(e) || i === tries - 1) throw e; await sleep(1500 * (i + 1)); }
+    catch (e) {
+      last = e;
+      if (!isTransient(e) || i === tries - 1) throw e;
+      if (i === 1) c.useAltHost = true; // بعد محاولتين: ننتقل لنطاق Agora البديل (api.sd-rtn.com)
+      await sleep(1500 * (i + 1));
+    }
   }
   throw last;
 }
 
 async function callOnce(c, path, body) {
   const auth = Buffer.from(`${c.customerId}:${c.customerSecret}`).toString('base64');
-  const res = await fetch(`https://api.agora.io/v1/apps/${c.appId}/cloud_recording/${path}`, {
+  const host = c.useAltHost ? 'api.sd-rtn.com' : 'api.agora.io';
+  const res = await fetch(`https://${host}/v1/apps/${c.appId}/cloud_recording/${path}`, {
     method: 'POST',
     headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json;charset=utf-8' },
     body: JSON.stringify(body),
