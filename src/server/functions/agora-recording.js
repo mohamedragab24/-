@@ -29,7 +29,20 @@ function missing(c) {
   ].filter(Boolean);
 }
 
-async function call(c, path, body) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const isTransient = (e) => /allocate_timeout|timeout|temporar|busy|overload|5\d\d/i.test(String(e?.message || '')) || (e?.agoraStatus >= 500);
+
+/** يعيد المحاولة عند أخطاء Agora المؤقتة (مثل allocate_timeout). */
+async function call(c, path, body, tries = 4) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try { return await callOnce(c, path, body); }
+    catch (e) { last = e; if (!isTransient(e) || i === tries - 1) throw e; await sleep(1500 * (i + 1)); }
+  }
+  throw last;
+}
+
+async function callOnce(c, path, body) {
   const auth = Buffer.from(`${c.customerId}:${c.customerSecret}`).toString('base64');
   const res = await fetch(`https://api.agora.io/v1/apps/${c.appId}/cloud_recording/${path}`, {
     method: 'POST',
@@ -39,7 +52,7 @@ async function call(c, path, body) {
   let data = {};
   try { data = await res.json(); } catch (_) {}
   if (!res.ok) {
-    const msg = data?.reason || data?.message || `HTTP ${res.status}`;
+    const msg = `${data?.reason || data?.message || 'HTTP ' + res.status}${data?.code ? ' (code ' + data.code + ')' : ''}`;
     const err = new Error(`Agora ${path.split('/').pop()}: ${msg}`);
     err.agoraStatus = res.status;
     throw err;
@@ -112,4 +125,18 @@ async function fileExists(key, tries = 5, delayMs = 3000) {
   return false;
 }
 
-module.exports = { startRecording, stopRecording, fileExists };
+/** فحص سريع للإعدادات: أي متغير ناقص + محاولة acquire حقيقية (بدون بدء تسجيل ولا تكلفة). */
+async function checkConfig() {
+  const c = cfg();
+  const missingVars = missing(c);
+  const out = { missingVars, acquire: null };
+  if (c.appId && c.customerId && c.customerSecret) {
+    try {
+      const r = await call(c, 'acquire', { cname: `check_${Date.now()}`.slice(0, 40), uid: String(REC_UID), clientRequest: { resourceExpiredHour: 1, scene: 0 } }, 2);
+      out.acquire = { ok: !!r.resourceId };
+    } catch (e) { out.acquire = { ok: false, error: String(e?.message || e), status: e?.agoraStatus || 0 }; }
+  }
+  return out;
+}
+
+module.exports = { startRecording, stopRecording, fileExists, checkConfig };

@@ -21,6 +21,13 @@ const isAdminUid = async (uid) => {
   return p.isAdmin === true || p.role === 'admin';
 };
 
+/** الأدمن: فحص إعدادات تسجيل Agora/R2 (المتغيرات الناقصة + اختبار acquire). */
+exports.adminAgoraRecordingCheck = onCall(async (request) => {
+  const uid = reqUid(request);
+  if (!(await isAdminUid(uid))) throw new HttpsError('permission-denied', 'للأدمن فقط');
+  return require('./agora-recording').checkConfig();
+});
+
 /** IP كما يراه الخادم (لا يمكن للعميل تزويره): أول عنوان في x-forwarded-for. */
 exports.getMyIp = onCall(async (request) => {
   const h = request.rawRequest?.headers;

@@ -463,7 +463,8 @@ exports.endGroupSession = onCall(async (request) => {
   const sid = String(request.data?.sessionId || '').trim();
   const sRef = ref.collection('sessions').doc(sid);
   const s = await sRef.get();
-  if (!s.exists) throw new HttpsError('not-found', 'الجلسة غير موجودة');
+  // الجلسة أُنهيت من قبل (ضغطتين/انقطاع): نعتبر العملية ناجحة بدل خطأ يربك المستخدم
+  if (!s.exists) return { ok: true, already: true, recording: false };
   const d = s.data();
   // إنهاء الاجتماع: يُحذف من المجموعة فيختفي عند الجميع (والمتصلون يُخرَجون تلقائيًا من التطبيق)،
   // ويُحذف إشعار «بدأت جلسة» من كل الأعضاء. التسجيل (إن وُجد) يبقى في «الجلسات المسجلة».

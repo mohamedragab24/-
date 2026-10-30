@@ -29,6 +29,15 @@ export default function AdminSessionRecordings() {
       setPlayUrl(r.data.url);
     } catch (e: any) { toast({ variant: "destructive", title: "تعذر التشغيل", description: e?.message }); }
   };
+  const checkAgora = async () => {
+    try {
+      const r: any = await httpsCallable(fns(), "adminAgoraRecordingCheck")({});
+      const d = r.data || {};
+      if (d.missingVars?.length) { toast({ variant: "destructive", title: "متغيرات ناقصة في Vercel", description: d.missingVars.join(", ") }); return; }
+      if (d.acquire?.ok) toast({ title: "إعدادات Agora سليمة", description: "تم حجز مورد تسجيل بنجاح." });
+      else toast({ variant: "destructive", title: "فشل اختبار Agora", description: d.acquire?.error || "سبب غير معروف" });
+    } catch (e: any) { toast({ variant: "destructive", title: "تعذر الفحص", description: e?.message }); }
+  };
   const retry = async (id: string) => {
     try {
       const r: any = await httpsCallable(fns(), "adminRetrySessionRecording")({ requestId: id });
@@ -51,6 +60,7 @@ export default function AdminSessionRecordings() {
         <h1 className="text-3xl font-black">تسجيلات جلسات الاستفهام</h1>
         <p className="text-muted-foreground">تُحفظ للإدارة فقط وتُحذف تلقائيًا بعد يومين، أو 14 يومًا كحد أقصى لو قُدّمت شكوى ولم ننهِ الرد عليها.</p>
       </div>
+      <Button variant="outline" onClick={checkAgora} className="font-black">فحص إعدادات تسجيل Agora</Button>
       <Card className="rounded-3xl overflow-hidden">
         <Table>
           <TableHeader><TableRow><TableHead className="text-right">الجلسة</TableHead><TableHead className="text-right">الحالة</TableHead><TableHead className="text-right">يُحذف بعد</TableHead><TableHead className="text-right">حفظ عند المستفهم</TableHead><TableHead className="text-right">إجراء</TableHead></TableRow></TableHeader>
