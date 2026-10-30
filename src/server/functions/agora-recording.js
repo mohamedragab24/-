@@ -33,7 +33,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isTransient = (e) => /allocate_timeout|timeout|temporar|busy|overload|5\d\d/i.test(String(e?.message || '')) || (e?.agoraStatus >= 500);
 
 /** يعيد المحاولة عند أخطاء Agora المؤقتة (مثل allocate_timeout). */
-async function call(c, path, body, tries = 4) {
+async function call(c, path, body, tries = 5) {
   let last;
   for (let i = 0; i < tries; i++) {
     try { return await callOnce(c, path, body); }
@@ -41,7 +41,7 @@ async function call(c, path, body, tries = 4) {
       last = e;
       if (!isTransient(e) || i === tries - 1) throw e;
       if (i === 1) c.useAltHost = true; // بعد محاولتين: ننتقل لنطاق Agora البديل (api.sd-rtn.com)
-      await sleep(1500 * (i + 1));
+      await sleep(2000 * (i + 1)); // backoff: 2s, 4s, 6s, 8s (توصية Agora لخطأ allocate_timeout)
     }
   }
   throw last;

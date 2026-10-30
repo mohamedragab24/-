@@ -784,6 +784,29 @@ exports.sendGroupInvites = onCall(async (request) => {
   return { ok: true, sent, skipped };
 });
 
+/** يبدأ تسجيل جلسة مجموعة عند الطلب (idempotent): يُستدعى من تطبيق المدير بعد دخوله القناة لو فشل البدء الأول. */
+exports.startGroupRecordingNow = onCall(async (request) => {
+  const uid = reqUid(request);
+  const { ref, id } = await loadManageableGroup(uid, request.data?.groupId, 'manageSessions');
+  const sid = String(request.data?.sessionId || '').trim();
+  const sRef = ref.collection('sessions').doc(sid);
+  const s = await sRef.get();
+  if (!s.exists) throw new HttpsError('not-found', 'الجلسة غير موجودة');
+  const d = s.data();
+  if (!d.record) return { ok: true, skipped: true };
+  if (d.recordingState?.sid) return { ok: true, already: true };
+  const channel = `Group_${id}_${sid}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  try {
+    const state = await require('./agora-recording').startRecording({ channel, groupId: id });
+    await sRef.update({ recordingState: state, recordingError: FV.delete() });
+    return { ok: true };
+  } catch (e) {
+    const msg = String(e?.message || e).slice(0, 300);
+    await sRef.update({ recordingError: msg });
+    return { ok: false, error: msg };
+  }
+});
+
 /** رابط المجموعة: يرسله المنشئ للطلاب فيقدّمون طلب انضمام. */
 exports.getGroupJoinLink = onCall(async (request) => {
   const uid = reqUid(request);
