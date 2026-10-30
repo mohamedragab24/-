@@ -30,12 +30,18 @@ function missing(c) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const isTransient = (e) => /allocate_timeout|timeout|temporar|busy|overload|5\d\d/i.test(String(e?.message || '')) || (e?.agoraStatus >= 500);
+const isTransient = (e) => /allocate_timeout|timeout|temporar|busy|overload|region|5\d\d/i.test(String(e?.message || '')) || (e?.agoraStatus >= 500);
 
 /** يعيد المحاولة عند أخطاء Agora المؤقتة (مثل allocate_timeout). */
 async function call(c, path, body, tries = 5) {
   let last;
+  // بعض المشاريع يفشل فيها حجز المورد (allocate_timeout) بدون تحديد منطقة: نجرّب مناطق Agora بالتناوب
+  const regions = (String(process.env.AGORA_RECORDING_REGION || '').trim() ? [String(process.env.AGORA_RECORDING_REGION).trim()] : ['', 'EU', 'AP', 'NA', 'EU']);
   for (let i = 0; i < tries; i++) {
+    if (path === 'acquire' && body?.clientRequest) {
+      const r = regions[Math.min(i, regions.length - 1)];
+      if (r) body.clientRequest.region = r; else delete body.clientRequest.region;
+    }
     try { return await callOnce(c, path, body); }
     catch (e) {
       last = e;
@@ -138,7 +144,7 @@ async function checkConfig() {
   const out = { missingVars, acquire: null };
   if (c.appId && c.customerId && c.customerSecret) {
     try {
-      const r = await call(c, 'acquire', { cname: `check_${Date.now()}`.slice(0, 40), uid: String(REC_UID), clientRequest: { resourceExpiredHour: 1, scene: 0 } }, 2);
+      const r = await call(c, 'acquire', { cname: `check_${Date.now()}`.slice(0, 40), uid: String(REC_UID), clientRequest: { resourceExpiredHour: 1, scene: 0 } }, 5);
       out.acquire = { ok: !!r.resourceId };
     } catch (e) { out.acquire = { ok: false, error: String(e?.message || e), status: e?.agoraStatus || 0 }; }
   }
