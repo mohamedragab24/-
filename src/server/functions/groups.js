@@ -430,30 +430,8 @@ exports.startGroupSession = onCall(async (request) => {
   const title = String(request.data?.title || '').trim().slice(0, 120) || `جلسة ${new Date().toLocaleDateString('ar-EG', { timeZone: TZ })}`;
   const doc = ref.collection('sessions').doc();
   await doc.set({ title, record, status: 'live', startedAt: FV.serverTimestamp(), room: `Fahimni_group_${id}_${doc.id}` });
-  let recordingWarning = '';
-  if (record) {
-    // تسجيل Agora السحابي: يبدأ مع الجلسة ويحفظ الملف في R2 عند الإنهاء
-    try {
-      const channel = `Group_${id}_${doc.id}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-      const state = await require('./agora-recording').startRecording({ channel, groupId: id });
-      await doc.update({ recordingState: state });
-    } catch (e) {
-      console.error('agora recording start failed', e);
-      recordingWarning = String(e?.message || e).slice(0, 300);
-      await doc.update({ recordingError: recordingWarning });
-    }
-  }
-  const members = await ref.collection('members').get();
-  for (const m of members.docs) await notify(m.id, 'بدأت جلسة جديدة', `بدأ المُفهم جلسة في «${g.name}» — ادخل من التطبيق`, { type: 'group_session', groupId: id, sessionId: doc.id }, `gsession_${doc.id}`);
-  // إشعار في شريط إشعارات الهاتف لكل أعضاء المجموعة (غير صاحب الجلسة)
-  try {
-    const { pushToUids } = require('./push');
-    await pushToUids(members.docs.map((m) => m.id).filter((m) => m !== uid), {
-      title: 'يوجد اجتماع الآن في مجموعتك',
-      body: `بدأ اجتماع «${title}» في «${g.name}» — ادخل من تطبيق فهمت`,
-      data: { type: 'group_session', groupId: id, sessionId: doc.id },
-    });
-  } catch (e) { console.error('group session push failed', e); }
+  // التسجيل يتم من جهاز المدير (شاشة + صوت) ويُرفع إلى R2 عند الانتهاء — بدون Agora السحابي.
+  const recordingWarning = '';
   return { ok: true, sessionId: doc.id, room: `Fahimni_group_${id}_${doc.id}`, recordingWarning };
 });
 
@@ -477,39 +455,17 @@ exports.endGroupSession = onCall(async (request) => {
       await batch.commit();
     }
   } catch (e) { console.error('delete session notifications failed', e); }
-  let agoraResult = null;
-  if (d.record && d.recordingState?.resourceId) {
-    try { agoraResult = await require('./agora-recording').stopRecording(d.recordingState); }
-    catch (e) { console.error('agora recording stop failed', e); agoraResult = { error: String(e?.message || e).slice(0, 300) }; }
-  }
   if (d.record) {
-    // يُضاف تلقائيًا لقسم الجلسات المسجلة؛ يكتمل الملف من تسجيل Agora (أو JaaS webhook للجلسات القديمة).
-    // لا نعيد حالة تسجيل اكتمل رفعه بالفعل (الـ webhook قد يسبق إنهاء الجلسة).
+    // يظهر في «الجلسات المسجلة» بحالة «بانتظار الرفع» حتى يرفع تطبيق المدير الملف إلى R2 ويتأكد السيرفر من وصوله.
+    // لا نعيد حالة تسجيل اكتمل بالفعل (قد يسبق الرفع إنهاء الجلسة).
     const rRef = ref.collection('recordings').doc(sid);
     const lRef = db.collection('lectureRecordings').doc(sid);
     const [rEx, lEx] = await Promise.all([rRef.get(), lRef.get()]);
-    if (!rEx.exists) await rRef.set({ title: d.title, sessionId: sid, status: 'processing', size: 0, createdAt: FV.serverTimestamp(), order: Date.now() });
+    if (!rEx.exists) await rRef.set({ title: d.title, sessionId: sid, status: 'uploading', size: 0, createdAt: FV.serverTimestamp(), order: Date.now() });
     const g = (await ref.get()).data() || {};
     const meta = { kind: 'group', title: d.title, groupId: ref.id, groupName: g.name || '', ownerUid: g.ownerUid || '', ownerName: g.ownerName || '', sessionId: sid, room: d.room || '' };
-    if (!lEx.exists) await lRef.set({ ...meta, status: 'processing', size: 0, durationSec: 0, createdAt: FV.serverTimestamp(), order: Date.now() });
+    if (!lEx.exists) await lRef.set({ ...meta, status: 'uploading', size: 0, durationSec: 0, createdAt: FV.serverTimestamp(), order: Date.now() });
     else await lRef.set(meta, { merge: true });
-    if (agoraResult) {
-      if (agoraResult.mp4 && agoraResult.mp4.startsWith(`groups/${ref.id}/`)) {
-        // لا نعتبر الجلسة محفوظة إلا بعد التأكد أن الملف موصول في R2 فعلًا
-        const exists = await require('./agora-recording').fileExists(agoraResult.mp4);
-        const st = exists ? 'ready' : 'processing';
-        const err = exists ? '' : 'الملف لم يظهر في التخزين بعد';
-        await rRef.set({ r2Key: agoraResult.mp4, status: st, error: err, source: 'agora', endedAtMs: Date.now() }, { merge: true });
-        await lRef.set({ r2Key: agoraResult.mp4, status: st, error: err, source: 'agora', readyAt: exists ? FV.serverTimestamp() : null }, { merge: true });
-      } else {
-        const why = agoraResult.error || (agoraResult.files?.length ? 'لم يُنتج ملف mp4 (تم إنتاج HLS فقط)' : 'لم يُسجَّل أي صوت أو فيديو في الجلسة');
-        await rRef.set({ status: 'failed', error: why }, { merge: true });
-        await lRef.set({ status: 'failed', error: why }, { merge: true });
-      }
-    } else if (d.recordingError) {
-      await rRef.set({ status: 'failed', error: String(d.recordingError) }, { merge: true });
-      await lRef.set({ status: 'failed', error: String(d.recordingError) }, { merge: true });
-    }
   }
   return { ok: true, recording: !!d.record };
 });
@@ -782,29 +738,6 @@ exports.sendGroupInvites = onCall(async (request) => {
     } catch (e) { skipped.push({ publicId: pid, reason: 'تعذر الإرسال' }); }
   }
   return { ok: true, sent, skipped };
-});
-
-/** يبدأ تسجيل جلسة مجموعة عند الطلب (idempotent): يُستدعى من تطبيق المدير بعد دخوله القناة لو فشل البدء الأول. */
-exports.startGroupRecordingNow = onCall(async (request) => {
-  const uid = reqUid(request);
-  const { ref, id } = await loadManageableGroup(uid, request.data?.groupId, 'manageSessions');
-  const sid = String(request.data?.sessionId || '').trim();
-  const sRef = ref.collection('sessions').doc(sid);
-  const s = await sRef.get();
-  if (!s.exists) throw new HttpsError('not-found', 'الجلسة غير موجودة');
-  const d = s.data();
-  if (!d.record) return { ok: true, skipped: true };
-  if (d.recordingState?.sid) return { ok: true, already: true };
-  const channel = `Group_${id}_${sid}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-  try {
-    const state = await require('./agora-recording').startRecording({ channel, groupId: id });
-    await sRef.update({ recordingState: state, recordingError: FV.delete() });
-    return { ok: true };
-  } catch (e) {
-    const msg = String(e?.message || e).slice(0, 300);
-    await sRef.update({ recordingError: msg });
-    return { ok: false, error: msg };
-  }
 });
 
 /** رابط المجموعة: يرسله المنشئ للطلاب فيقدّمون طلب انضمام. */

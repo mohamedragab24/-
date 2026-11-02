@@ -112,25 +112,10 @@ exports.startIstifhamRecording = onCall(async (request) => {
   const uid = reqUid(request);
   const requestId = String(request.data?.requestId || '').trim();
   const { ref, r } = await loadParticipantRequest(uid, requestId);
-  if (r.recordingState?.sid) return { ok: true, already: true };
-  const channel = `Fahimni_${requestId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-  try {
-    // نحجز الحالة أولًا حتى لا يبدأ تسجيلان متزامنان من الطرفين
-    const lock = await db.runTransaction(async (tx) => {
-      const cur = (await tx.get(ref)).data() || {};
-      if (cur.recordingState || cur.recordingStarting) return false;
-      tx.update(ref, { recordingStarting: true });
-      return true;
-    });
-    if (!lock) return { ok: true, already: true };
-    const state = await require('./agora-recording').startRecording({ channel, groupId: `_sessions`, prefix: ['sessions', requestId] });
-    await ref.update({ recordingState: state, recordingStarting: false, recordingOpen: true, recordingStartedAt: FV.serverTimestamp(), recordingStartedAtMs: Date.now() });
-    return { ok: true };
-  } catch (e) {
-    console.error('istifham recording start failed', e);
-    await ref.update({ recordingStarting: false, recordingError: String(e?.message || e).slice(0, 300) }).catch(() => {});
-    return { ok: false, error: 'تعذر بدء التسجيل' };
-  }
+  // التسجيل يتم من جهاز المُفهم (شاشة + صوت) ثم يُرفع إلى R2؛ هنا نعلّم الجلسة فقط ليتابعها الـ cron
+  if (r.recordingOpen || r.recordingStopped) return { ok: true, already: true };
+  await ref.update({ recordingMode: 'device', recordingOpen: true, recordingStartedAtMs: Date.now() });
+  return { ok: true };
 });
 
 /** المشاركون يختارون حفظ التسجيل عند المستفهم. data: { requestId, days: 0|1|10|15|30 } (0 = لا أريد الحفظ) */
@@ -148,11 +133,8 @@ exports.setSessionRetention = onCall(async (request) => {
   return { ok: true };
 });
 
-/** ينهي التسجيل ويحفظ بياناته (idempotent: لا يُنشئ تسجيلًا مكررًا لنفس الجلسة). */
+/** يغلق الجلسة (idempotent) وينشئ سجل التسجيل بحالة «بانتظار الرفع» إن لم يكن موجودًا؛ الملف نفسه يصل من جهاز المُفهم. */
 async function finalizeIstifhamRecording(ref, r, requestId) {
-  const state = r.recordingState;
-  if (!state?.sid) return { ok: true, already: true };
-  // قفل ذري: أول استدعاء فقط ينفّذ الإنهاء
   const won = await db.runTransaction(async (tx) => {
     const cur = (await tx.get(ref)).data() || {};
     if (cur.recordingStopped) return false;
@@ -160,30 +142,18 @@ async function finalizeIstifhamRecording(ref, r, requestId) {
     return true;
   });
   if (!won) return { ok: true, already: true };
-  let mp4 = null; let error = '';
-  try { mp4 = (await require('./agora-recording').stopRecording(state)).mp4; } catch (e) { error = String(e?.message || e).slice(0, 300); }
-  const ret = r.retention || {};
-  const agreed = ret.mustafhem && ret.mufhem && ret.mustafhem === ret.mufhem ? Number(ret.mustafhem) : 0;
-  const now = Date.now();
-  const key = mp4 && mp4.startsWith(`sessions/${requestId}/`) ? mp4 : '';
-  const base = {
-    requestId, sessionId: requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, participants: [r.mustafhemId, r.mufhemId].filter(Boolean),
-    title: String(r.title || ''), r2Key: key,
-    startedAtMs: Number(r.recordingStartedAtMs || 0), endedAtMs: now, createdAt: FV.serverTimestamp(), complaint: false,
-    adminExpiresAt: now + 2 * DAY, // للإدارة فقط: يومان ثم حذف تلقائي (14 يومًا كحد أقصى لو فيه شكوى)
-    studentSaveDays: agreed, studentExpiresAt: agreed ? now + agreed * DAY : 0,
-    consent: { mustafhem: { days: ret.mustafhem || 0, at: r.retentionAt?.mustafhem || 0 }, mufhem: { days: ret.mufhem || 0, at: r.retentionAt?.mufhem || 0 } },
-  };
   const out = db.collection('sessionRecordings').doc(requestId);
-  if (!key) {
-    await out.set({ ...base, status: 'failed', error: error || 'لم يُنتج ملف تسجيل' }, { merge: true });
-    return { ok: false, status: 'failed' };
-  }
-  await out.set({ ...base, status: 'processing', error: '' }, { merge: true });
-  // لا نعتبر التسجيل مكتملًا إلا بعد التأكد أن الملف موجود في R2 فعلًا
-  const exists = await waitForFile(key);
-  await out.set(exists ? { status: 'ready', error: '', savedAtMs: Date.now() } : { status: 'processing', error: 'الملف لم يظهر في التخزين بعد، سيُعاد الفحص تلقائيًا' }, { merge: true });
-  return { ok: true, saved: !!agreed, status: exists ? 'ready' : 'processing' };
+  const cur = (await out.get()).data();
+  if (cur && cur.status === 'ready') return { ok: true, status: 'ready' };
+  const { buildIstifhamRecordingBase } = require('./device-recording');
+  await out.set({
+    ...buildIstifhamRecordingBase(r, requestId, Date.now()),
+    r2Key: `sessions/${requestId}/${requestId}.mp4`,
+    status: cur?.status === 'uploading' ? 'uploading' : 'uploading',
+    error: cur?.error || 'بانتظار رفع التسجيل من جهاز المُفهم',
+    createdAt: cur?.createdAt || FV.serverTimestamp(),
+  }, { merge: true });
+  return { ok: true, status: 'uploading' };
 }
 
 /** إنهاء التسجيل من أي طرف عند الخروج. */
@@ -194,7 +164,7 @@ exports.endIstifhamRecording = onCall(async (request) => {
   return finalizeIstifhamRecording(ref, r, requestId);
 });
 
-/** الأدمن: إعادة فحص تسجيل لم يكتمل (أو فاشل لو الملف موجود). */
+/** الأدمن: إعادة فحص تسجيل لم يكتمل — هل وصل الملف إلى R2 الآن؟ */
 exports.adminRetrySessionRecording = onCall(async (request) => {
   const uid = reqUid(request);
   if (!(await isAdminUid(uid))) throw new HttpsError('permission-denied', 'للأدمن فقط');
@@ -202,19 +172,12 @@ exports.adminRetrySessionRecording = onCall(async (request) => {
   const ref = db.collection('sessionRecordings').doc(requestId);
   const d = (await ref.get()).data();
   if (!d) throw new HttpsError('not-found', 'التسجيل غير موجود');
-  if (!d.r2Key) {
-    // لم يُسجَّل اسم ملف: نحاول إيقاف التسجيل/قراءة الحالة مرة أخرى من الجلسة
-    const r = (await db.collection('istifhams').doc(requestId).get()).data() || {};
-    if (!r.recordingState) throw new HttpsError('failed-precondition', 'لا توجد بيانات تسجيل لهذه الجلسة');
-    let mp4 = null;
-    try { mp4 = (await require('./agora-recording').stopRecording(r.recordingState)).mp4; } catch (e) { throw new HttpsError('unavailable', `تعذر استرجاع التسجيل: ${String(e?.message || e).slice(0, 150)}`); }
-    if (!mp4 || !mp4.startsWith(`sessions/${requestId}/`)) throw new HttpsError('failed-precondition', 'لم يُنتج ملف تسجيل لهذه الجلسة');
-    await ref.update({ r2Key: mp4 });
-    d.r2Key = mp4;
-  }
-  const exists = await r2FileExists(d.r2Key);
-  await ref.update(exists ? { status: 'ready', error: '' } : { status: 'failed', error: 'الملف غير موجود في التخزين' });
-  return { ok: exists, status: exists ? 'ready' : 'failed' };
+  const key = d.r2Key || `sessions/${requestId}/${requestId}.mp4`;
+  const exists = await r2FileExists(key);
+  await ref.update(exists
+    ? { status: 'ready', error: '', r2Key: key, savedAtMs: Date.now() }
+    : { status: d.status === 'ready' ? 'ready' : 'uploading', error: 'الملف لم يصل بعد. يُستكمل الرفع تلقائيًا من جهاز المُفهم عند فتح التطبيق وتوفر الإنترنت.' });
+  return { ok: exists, status: exists ? 'ready' : 'uploading' };
 });
 
 /** رابط مشاهدة مؤقت: الأدمن دائمًا، والمستفهم فقط لو اتفق الطرفان على الحفظ ولم تنته المدة. */
@@ -287,6 +250,12 @@ async function cleanupExpiredRecordings() {
     const d = doc.data();
     const adminLive = now < Number(d.adminExpiresAt || 0);
     const studentLive = d.studentSaveDays > 0 && now < Number(d.studentExpiresAt || 0);
+    if (d.status === 'uploading' && adminLive) {
+      const age = now - (Number(d.uploadStartedAtMs) || Number(d.endedAtMs) || (d.createdAt?.toMillis ? d.createdAt.toMillis() : now));
+      if (d.r2Key && await r2FileExists(d.r2Key)) await doc.ref.update({ status: 'ready', error: '', savedAtMs: now });
+      else if (age > 48 * 3600 * 1000) await doc.ref.update({ status: 'failed', error: 'لم يصل التسجيل من جهاز المُفهم خلال 48 ساعة' });
+      continue;
+    }
     if (d.status === 'processing' && d.r2Key && adminLive) {
       if (await r2FileExists(d.r2Key)) await doc.ref.update({ status: 'ready', error: '' });
       continue;

@@ -1052,3 +1052,4 @@ Object.assign(exports, require('./istifham'));
 Object.assign(exports, require('./session'));
 Object.assign(exports, require('./refunds'));
 Object.assign(exports, require('./diagnose'));
+Object.assign(exports, require('./device-recording'));
