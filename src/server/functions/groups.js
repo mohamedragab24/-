@@ -426,7 +426,7 @@ exports.submitGroupQuiz = onCall(async (request) => {
 exports.startGroupSession = onCall(async (request) => {
   const uid = reqUid(request);
   const { ref, g, id } = await loadManageableGroup(uid, request.data?.groupId, 'manageSessions');
-  const record = request.data?.record === true;
+  const record = true; // التسجيل إجباري لكل جلسات المجموعات
   const title = String(request.data?.title || '').trim().slice(0, 120) || `جلسة ${new Date().toLocaleDateString('ar-EG', { timeZone: TZ })}`;
   const doc = ref.collection('sessions').doc();
   await doc.set({ title, record, status: 'live', startedAt: FV.serverTimestamp(), room: `Fahimni_group_${id}_${doc.id}` });
