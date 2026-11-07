@@ -1,6 +1,7 @@
 /**
- * تسجيل اجتماعات المجموعات عبر Agora Cloud Recording (وضع mix: فيديو واحد لكل الجلسة)
- * مع الحفظ مباشرة في Cloudflare R2 (S3-compatible) تحت groups/<groupId>/recordings/.
+ * «بوت التسجيل» الخاص بالمنصة: Agora Cloud Recording يدخل القناة بمعرّف مخفي (REC_UID) ويسجّل
+ * كل الجلسة (صوت + فيديو + مشاركة الشاشة) في فيديو واحد (mix) ويرفعه مباشرة إلى Cloudflare R2،
+ * بدون أي تسجيل على أجهزة المُفهّم أو المستفهم. يُستخدم لجلسات المجموعات والاستفهام (انظر bot-recording.js).
  *
  * متغيرات Vercel المطلوبة:
  *   AGORA_APP_ID, AGORA_APP_CERTIFICATE            (موجودة للاجتماعات)
@@ -53,13 +54,13 @@ async function call(c, path, body, tries = 5) {
   throw last;
 }
 
-async function callOnce(c, path, body) {
+async function callOnce(c, path, body, method = 'POST') {
   const auth = Buffer.from(`${c.customerId}:${c.customerSecret}`).toString('base64');
   const host = c.useAltHost ? 'api.sd-rtn.com' : 'api.agora.io';
   const res = await fetch(`https://${host}/v1/apps/${c.appId}/cloud_recording/${path}`, {
-    method: 'POST',
+    method,
     headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json;charset=utf-8' },
-    body: JSON.stringify(body),
+    ...(method === 'GET' ? {} : { body: JSON.stringify(body) }),
   });
   let data = {};
   try { data = await res.json(); } catch (_) {}
@@ -89,9 +90,9 @@ async function startRecording({ channel, groupId, prefix }) {
     clientRequest: {
       token,
       recordingConfig: {
-        channelType: 0,
+        channelType: 1, // التطبيق يدخل القناة بـ liveBroadcasting (agora_meeting_room.dart) فلازم يطابقه
         streamTypes: 2, // صوت + فيديو
-        maxIdleTime: 1800, // يبقى بانتظار دخول أحد حتى 30 دقيقة
+        maxIdleTime: 1800, // يبقى بانتظار دخول أحد (وبعد خروج الجميع) حتى 30 دقيقة ثم يتوقف وحده
         transcodingConfig: { width: 1280, height: 720, fps: 15, bitrate: 1200, mixedVideoLayout: 1, backgroundColor: '#000000' },
       },
       recordingFileConfig: { avFileType: ['hls', 'mp4'] },
@@ -106,21 +107,78 @@ async function startRecording({ channel, groupId, prefix }) {
       },
     },
   });
-  return { resourceId, sid: start.sid, uid, channel };
+  return { resourceId, sid: start.sid, uid, channel, mode: 'mix' };
+}
+
+/** يجمع كل أسماء الملفات من رد Agora (الشكل يختلف بين وضع mix ووضع web page). */
+function collectFileNames(node, out = []) {
+  if (!node) return out;
+  if (typeof node === 'string') { if (/\.(mp4|m3u8)$/i.test(node)) out.push(node); return out; }
+  if (Array.isArray(node)) { node.forEach((n) => collectFileNames(n, out)); return out; }
+  if (typeof node === 'object') {
+    for (const [k, v] of Object.entries(node)) {
+      if (/^file_?name$/i.test(k) && typeof v === 'string') out.push(v);
+      else collectFileNames(v, out);
+    }
+  }
+  return out;
 }
 
 /** يوقف التسجيل ويرجّع مسار ملف mp4 داخل R2 (أو null لو لم يُنتج). */
 async function stopRecording(state) {
   const c = cfg();
-  const res = await call(c, `resourceid/${state.resourceId}/sid/${state.sid}/mode/mix/stop`, {
+  const mode = state.mode === 'web' ? 'web' : 'mix';
+  const res = await call(c, `resourceid/${state.resourceId}/sid/${state.sid}/mode/${mode}/stop`, {
     cname: state.channel,
     uid: state.uid,
-    clientRequest: { async_stop: false },
+    clientRequest: mode === 'web' ? {} : { async_stop: false },
   });
-  const list = res?.serverResponse?.fileList;
-  const names = Array.isArray(list) ? list.map((f) => String(f?.fileName || '')) : (typeof list === 'string' ? [list] : []);
-  const mp4 = names.find((n) => n.toLowerCase().endsWith('.mp4')) || null;
-  return { mp4, files: names };
+  const names = [...new Set(collectFileNames(res?.serverResponse))];
+  const mp4s = names.filter((n) => n.toLowerCase().endsWith('.mp4'));
+  return { mp4: mp4s[0] || null, mp4s, files: names };
+}
+
+const WEB_UID = 2147482000; // معرّف صفحة التسجيل داخل القناة (Web SDK) — لا يستخدمه أي مستخدم
+const WEB_REC_UID = '2147481000'; // معرّف خدمة تسجيل الصفحة لدى Agora
+
+/** يصدر توكن دخول القناة لصفحة التسجيل (مشاهد فقط). */
+function pageRtcToken(channel, hours = 9) {
+  const c = cfg();
+  const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
+  return RtcTokenBuilder.buildTokenWithUid(c.appId, c.cert, channel, WEB_UID, RtcRole.SUBSCRIBER, Math.floor(Date.now() / 1000) + hours * 3600);
+}
+
+/**
+ * يبدأ «تسجيل صفحة ويب» (Agora web page recording): خدمة Agora تفتح pageUrl في متصفح خفي وتسجّل
+ * ما يظهر فيه + صوته. الصفحة تعرض فيديوهات القناة والسبورة والملف المشارَك والشات، فيُسجَّل كل شيء.
+ */
+async function startWebRecording({ channel, pageUrl, prefix }) {
+  const c = cfg();
+  const miss = missing(c);
+  if (miss.length) throw new Error(`إعدادات التسجيل ناقصة في Vercel: ${miss.join(', ')}`);
+  const acq = await call(c, 'acquire', { cname: channel, uid: WEB_REC_UID, clientRequest: { resourceExpiredHour: 24, scene: 1 } });
+  const resourceId = acq.resourceId;
+  const start = await call(c, `resourceid/${resourceId}/mode/web/start`, {
+    cname: channel,
+    uid: WEB_REC_UID,
+    clientRequest: {
+      extensionServiceConfig: {
+        errorHandlePolicy: 'error_abort',
+        extensionServices: [{
+          serviceName: 'web_recorder_service',
+          errorHandlePolicy: 'error_abort',
+          serviceParam: { url: pageUrl, audioProfile: 0, videoWidth: 1280, videoHeight: 720, maxRecordingHour: 8 },
+        }],
+      },
+      recordingFileConfig: { avFileType: ['hls', 'mp4'] },
+      storageConfig: {
+        vendor: 11, region: 0, bucket: c.bucket, accessKey: c.r2Key, secretKey: c.r2Secret,
+        fileNamePrefix: prefix,
+        extensionParams: { endpoint: `${c.r2Account}.r2.cloudflarestorage.com` },
+      },
+    },
+  });
+  return { resourceId, sid: start.sid, uid: WEB_REC_UID, channel, mode: 'web' };
 }
 
 /** يتأكد فعليًا أن الملف موجود في R2 (HEAD) وحجمه معقول، مع إعادة المحاولة. */
@@ -151,4 +209,35 @@ async function checkConfig() {
   return out;
 }
 
-module.exports = { startRecording, stopRecording, fileExists, checkConfig };
+/** أسماء القنوات: لازم تطابق بالضبط ما يصدره getGroupMeetingToken / getAgoraMeetingToken. */
+const clean = (v) => String(v).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+const groupChannel = (groupId, sessionId) => clean(`Group_${groupId}_${sessionId}`);
+const istifhamChannel = (requestId) => clean(`Fahimni_${requestId}`);
+
+/** مسار mp4 المتوقع لو لم يرجع Agora قائمة الملفات (Agora يسمّيه <sid>_<channel>.mp4 تحت الـ prefix). */
+const expectedMp4Key = (prefix, sid, channel) => `${[].concat(prefix).join('/')}/${sid}_${channel}.mp4`;
+
+/** حجم الملف في R2 (0 لو غير موجود). */
+async function fileSize(key) {
+  try {
+    const { presignedUrl } = require('./r2');
+    const signed = presignedUrl({ method: 'HEAD', key, expiresSeconds: 120 });
+    const res = await fetch(signed.url, { method: 'HEAD' });
+    return res.ok ? Number(res.headers.get('content-length') || 0) : 0;
+  } catch (_) { return 0; }
+}
+
+/** هل البوت ما زال يسجّل؟ (Agora query). false لو انتهى أو لم يعد موجودًا. */
+async function isRunning(state) {
+  try {
+    const c = cfg();
+    const mode = state.mode === 'web' ? 'web' : 'mix';
+    const res = await callOnce(c, `resourceid/${state.resourceId}/sid/${state.sid}/mode/${mode}/query`, null, 'GET');
+    const raw = res?.serverResponse?.status;
+    if (raw === undefined) return true; // الاستعلام نجح (الجلسة ما زالت معروفة لدى Agora)
+    const st = Number(raw);
+    return st >= 1 && st <= 5; // 1..5 = جارٍ/بدأ/يعمل؛ 6+ = متوقف
+  } catch (_) { return false; }
+}
+
+module.exports = { startRecording, startWebRecording, pageRtcToken, WEB_UID, stopRecording, fileExists, fileSize, isRunning, checkConfig, groupChannel, istifhamChannel, expectedMp4Key };

@@ -136,6 +136,14 @@ service cloud.firestore {
       allow create: if isSignedIn();
       allow update: if isSignedIn() || isAdmin();
 
+      // سجل أحداث الجلسة (سبورة/ملف/شات) الذي يقرؤه بوت التسجيل: يكتبه طرفا الجلسة فقط، ولا يقرؤه أحد من العملاء (السيرفر فقط)
+      match /events/{eid} {
+        allow create: if isSignedIn() && (
+          request.auth.uid == get(/databases/$(database)/documents/istifhams/$(id)).data.get('mufhemId', '') ||
+          request.auth.uid == get(/databases/$(database)/documents/istifhams/$(id)).data.get('mustafhemId', ''));
+        allow read, update, delete: if false;
+      }
+
       match /offers/{offerId} {
         allow create: if isSignedIn() && offerGenderOk(id);
         allow read: if true;
@@ -331,6 +339,16 @@ service cloud.firestore {
         allow create, delete: if false;
       }
       match /usage/{u} { allow read, write: if false; }
+
+      // سجل أحداث الجلسة (سبورة/ملف/شات) الذي يقرؤه بوت التسجيل: يكتبه مدير الجلسة فقط ولا يقرؤه أحد من العملاء
+      match /sessions/{sid}/events/{eid} {
+        allow create: if isSignedIn() && (
+          get(/databases/$(database)/documents/groups/$(gid)).data.ownerUid == request.auth.uid ||
+          (exists(/databases/$(database)/documents/groups/$(gid)/members/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/groups/$(gid)/members/$(request.auth.uid)).data.role == 'editor' &&
+            get(/databases/$(database)/documents/groups/$(gid)/members/$(request.auth.uid)).data.permissions.manageSessions == true));
+        allow read, update, delete: if false;
+      }
     }
 
     // ملاحظات PDF: كل مستخدم يقرأ ويكتب ملاحظاته داخل users/{uid}/pdfNotes فقط.

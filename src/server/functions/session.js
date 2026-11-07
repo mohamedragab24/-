@@ -112,10 +112,20 @@ exports.startIstifhamRecording = onCall(async (request) => {
   const uid = reqUid(request);
   const requestId = String(request.data?.requestId || '').trim();
   const { ref, r } = await loadParticipantRequest(uid, requestId);
-  // التسجيل يتم من جهاز المُفهم (شاشة + صوت) ثم يُرفع إلى R2؛ هنا نعلّم الجلسة فقط ليتابعها الـ cron
-  if (r.recordingOpen || r.recordingStopped) return { ok: true, already: true };
-  await ref.update({ recordingMode: 'device', recordingOpen: true, recordingStartedAtMs: Date.now() });
-  return { ok: true };
+  // بوت المنصة يسجّل الجلسة كاملة (لا تسجيل على أجهزة الأطراف). نحجز البدء بمعاملة حتى لا يبدأ بوتان
+  // لو دخل الطرفان في نفس اللحظة.
+  const claimed = await db.runTransaction(async (tx) => {
+    const cur = (await tx.get(ref)).data() || {};
+    if (cur.recordingStopped || cur.recordingBotStarting || (cur.recordingOpen && cur.recordingMode === 'bot')) return false;
+    tx.update(ref, { recordingMode: 'bot', recordingBotStarting: true, recordingStartedAtMs: cur.recordingStartedAtMs || Date.now() });
+    return true;
+  });
+  if (!claimed) return { ok: true, already: true };
+  const bot = await require('./bot-recording').startIstifham(requestId);
+  await ref.update(bot.ok
+    ? { recordingOpen: true, recordingBotStarting: false, recordingBotError: '' }
+    : { recordingOpen: false, recordingBotStarting: false, recordingMode: 'bot-failed', recordingBotError: String(bot.error || '').slice(0, 300) });
+  return { ok: bot.ok === true };
 });
 
 /** المشاركون يختارون حفظ التسجيل عند المستفهم. data: { requestId, days: 0|1|10|15|30 } (0 = لا أريد الحفظ) */
@@ -142,6 +152,16 @@ async function finalizeIstifhamRecording(ref, r, requestId) {
     return true;
   });
   if (!won) return { ok: true, already: true };
+  // جلسة مسجَّلة بالبوت: نوقفه ونربط الملف
+  if (r.recordingMode === 'bot' || r.recordingMode === 'bot-failed') {
+    try {
+      const b = await require('./bot-recording').finishIstifham(requestId);
+      if (b.handled) return { ok: true, status: b.status === 'done' ? 'ready' : b.status };
+    } catch (e) { console.error('bot finish failed', requestId, e); }
+    const { buildIstifhamRecordingBase: base } = require('./device-recording');
+    await db.collection('sessionRecordings').doc(requestId).set({ ...base(r, requestId, Date.now()), r2Key: '', status: 'failed', error: 'لم يبدأ بوت التسجيل لهذه الجلسة', createdAt: FV.serverTimestamp() }, { merge: true });
+    return { ok: true, status: 'failed' };
+  }
   const out = db.collection('sessionRecordings').doc(requestId);
   const cur = (await out.get()).data();
   if (cur && cur.status === 'ready') return { ok: true, status: 'ready' };
@@ -172,6 +192,9 @@ exports.adminRetrySessionRecording = onCall(async (request) => {
   const ref = db.collection('sessionRecordings').doc(requestId);
   const d = (await ref.get()).data();
   if (!d) throw new HttpsError('not-found', 'التسجيل غير موجود');
+  if (d.source === 'bot' || d.status === 'processing') {
+    try { if (await require('./bot-recording').confirmPending(require('./bot-recording').iid(requestId))) return { ok: true, status: 'ready' }; } catch (e) { console.error('confirm bot failed', e); }
+  }
   const key = d.r2Key || `sessions/${requestId}/${requestId}.mp4`;
   const exists = await r2FileExists(key);
   await ref.update(exists
@@ -240,6 +263,7 @@ async function cleanupExpiredRecordings() {
   const open = await db.collection('istifhams').where('recordingOpen', '==', true).get();
   for (const doc of open.docs) {
     const r = doc.data();
+    if (r.recordingMode === 'bot') continue; // جلسات البوت يتابعها bot-recording.sweep (تتحقق أن البوت توقف فعلًا)
     if (now - Number(r.recordingStartedAtMs || 0) > 45 * 60 * 1000) {
       try { await finalizeIstifhamRecording(doc.ref, r, doc.id); finalized++; } catch (e) { console.error('finalize abandoned failed', doc.id, e); }
     }
@@ -272,6 +296,8 @@ async function cleanupExpiredRecordings() {
       trimmed++; // الإدارة انتهت مدتها لكن المستفهم لسه محتفظ بنسخة: الملف يبقى حتى انتهاء مدة المستفهم
     }
   }
-  return { removed, trimmed, finalized };
+  let bots = {};
+  try { bots = await require('./bot-recording').sweep(); } catch (e) { console.error('bot sweep failed', e); }
+  return { removed, trimmed, finalized, bots };
 }
 exports._cleanupExpiredRecordings = cleanupExpiredRecordings;

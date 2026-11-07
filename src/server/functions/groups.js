@@ -430,8 +430,11 @@ exports.startGroupSession = onCall(async (request) => {
   const title = String(request.data?.title || '').trim().slice(0, 120) || `جلسة ${new Date().toLocaleDateString('ar-EG', { timeZone: TZ })}`;
   const doc = ref.collection('sessions').doc();
   await doc.set({ title, record, status: 'live', startedAt: FV.serverTimestamp(), room: `Fahimni_group_${id}_${doc.id}` });
-  // التسجيل يتم من جهاز المدير (شاشة + صوت) ويُرفع إلى R2 عند الانتهاء — بدون Agora السحابي.
-  const recordingWarning = '';
+  // بوت المنصة (Agora Cloud Recording) يدخل القناة ويسجّل الجلسة كاملة ويرفعها إلى R2 تلقائيًا —
+  // لا يُطلب من المُفهّم ولا الطلاب تسجيل أي شيء.
+  const bot = await require('./bot-recording').startGroup(id, doc.id);
+  await doc.update({ botRecording: bot.ok === true });
+  const recordingWarning = bot.ok ? '' : 'تعذر بدء بوت التسجيل، سيتم تسجيل الجلسة كـ «فشل» ويمكن للإدارة مراجعة السبب.';
   return { ok: true, sessionId: doc.id, room: `Fahimni_group_${id}_${doc.id}`, recordingWarning };
 });
 
@@ -456,6 +459,11 @@ exports.endGroupSession = onCall(async (request) => {
     }
   } catch (e) { console.error('delete session notifications failed', e); }
   if (d.record) {
+    // الجلسات المسجلة بالبوت: نوقفه ونربط الملف (أو «جارٍ المعالجة» حتى يصل). المسار القديم (تسجيل الجهاز) يبقى للجلسات التي بدأت قبل التحديث.
+    try {
+      const bot = await require('./bot-recording').finishGroup(ref.id, sid, d.title);
+      if (bot.handled) return { ok: true, recording: true, bot: bot.status };
+    } catch (e) { console.error('bot finish failed', sid, e); }
     // يظهر في «الجلسات المسجلة» بحالة «بانتظار الرفع» حتى يرفع تطبيق المدير الملف إلى R2 ويتأكد السيرفر من وصوله.
     // لا نعيد حالة تسجيل اكتمل بالفعل (قد يسبق الرفع إنهاء الجلسة).
     const rRef = ref.collection('recordings').doc(sid);

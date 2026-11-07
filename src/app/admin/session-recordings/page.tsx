@@ -58,7 +58,7 @@ export default function AdminSessionRecordings() {
     <div className="p-6 md:p-10 space-y-8" dir="rtl">
       <div className="border-r-8 border-blue-600 pr-6">
         <h1 className="text-3xl font-black">تسجيلات جلسات الاستفهام</h1>
-        <p className="text-muted-foreground">يُسجَّل من جهاز المُفهم ويُرفع إلى R2. يُحفظ للإدارة فقط ويُحذف تلقائيًا بعد يومين، أو 14 يومًا كحد أقصى لو قُدّمت شكوى ولم ننهِ الرد عليها.</p>
+        <p className="text-muted-foreground">يُسجَّل تلقائيًا بواسطة بوت المنصة ويُرفع إلى R2. يُحفظ للإدارة فقط ويُحذف تلقائيًا بعد يومين، أو 14 يومًا كحد أقصى لو قُدّمت شكوى ولم ننهِ الرد عليها.</p>
       </div>
       <Card className="rounded-3xl overflow-hidden">
         <Table>
