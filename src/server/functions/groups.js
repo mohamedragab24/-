@@ -430,11 +430,16 @@ exports.startGroupSession = onCall(async (request) => {
   const title = String(request.data?.title || '').trim().slice(0, 120) || `جلسة ${new Date().toLocaleDateString('ar-EG', { timeZone: TZ })}`;
   const doc = ref.collection('sessions').doc();
   await doc.set({ title, record, status: 'live', startedAt: FV.serverTimestamp(), room: `Fahimni_group_${id}_${doc.id}` });
-  // بوت المنصة (Agora Cloud Recording) يدخل القناة ويسجّل الجلسة كاملة ويرفعها إلى R2 تلقائيًا —
-  // لا يُطلب من المُفهّم ولا الطلاب تسجيل أي شيء.
-  const bot = await require('./bot-recording').startGroup(id, doc.id);
-  await doc.update({ botRecording: bot.ok === true });
-  const recordingWarning = bot.ok ? '' : 'تعذر بدء بوت التسجيل، سيتم تسجيل الجلسة كـ «فشل» ويمكن للإدارة مراجعة السبب.';
+  // التسجيل يتم عبر «بوت فهمت» (ينضم للقناة كمشاهد خفي ويسجّل الجلسة كاملة ثم يرفعها إلى R2) — لا يحتاج أي إجراء من المدير أو الطلاب.
+  let recordingWarning = '';
+  try {
+    const state = await require('./recorder-bot').dispatchRecording({ kind: 'group', groupId: id, sessionId: doc.id, title });
+    await doc.update({ recordingJob: state, recordingMode: state.mode, recordingBotJob: state.jobId || '' });
+  } catch (e) {
+    recordingWarning = String(e?.message || e).slice(0, 300);
+    console.error('recorder bot dispatch failed', e);
+    await doc.update({ recordingError: recordingWarning });
+  }
   return { ok: true, sessionId: doc.id, room: `Fahimni_group_${id}_${doc.id}`, recordingWarning };
 });
 
@@ -459,11 +464,6 @@ exports.endGroupSession = onCall(async (request) => {
     }
   } catch (e) { console.error('delete session notifications failed', e); }
   if (d.record) {
-    // الجلسات المسجلة بالبوت: نوقفه ونربط الملف (أو «جارٍ المعالجة» حتى يصل). المسار القديم (تسجيل الجهاز) يبقى للجلسات التي بدأت قبل التحديث.
-    try {
-      const bot = await require('./bot-recording').finishGroup(ref.id, sid, d.title);
-      if (bot.handled) return { ok: true, recording: true, bot: bot.status };
-    } catch (e) { console.error('bot finish failed', sid, e); }
     // يظهر في «الجلسات المسجلة» بحالة «بانتظار الرفع» حتى يرفع تطبيق المدير الملف إلى R2 ويتأكد السيرفر من وصوله.
     // لا نعيد حالة تسجيل اكتمل بالفعل (قد يسبق الرفع إنهاء الجلسة).
     const rRef = ref.collection('recordings').doc(sid);
@@ -474,6 +474,33 @@ exports.endGroupSession = onCall(async (request) => {
     const meta = { kind: 'group', title: d.title, groupId: ref.id, groupName: g.name || '', ownerUid: g.ownerUid || '', ownerName: g.ownerName || '', sessionId: sid, room: d.room || '' };
     if (!lEx.exists) await lRef.set({ ...meta, status: 'uploading', size: 0, durationSec: 0, createdAt: FV.serverTimestamp(), order: Date.now() });
     else await lRef.set(meta, { merge: true });
+    // لم يبدأ البوت أصلًا ⇒ فشل واضح بسببه بدل «جارٍ المعالجة» للأبد
+    if (d.recordingError && !d.recordingJob) {
+      const err = String(d.recordingError).slice(0, 300);
+      if ((rEx.data() || {}).status !== 'ready') await rRef.set({ status: 'failed', error: err }, { merge: true });
+      if ((lEx.data() || {}).status !== 'ready') await lRef.set({ status: 'failed', error: err }, { merge: true });
+    }
+    // نُنهي التسجيل (Agora web recording أو البوت) ونربط الملف بالجلسة
+    const job = d.recordingJob || (d.recordingBotJob ? { mode: 'bot', jobId: d.recordingBotJob } : null);
+    if (job) {
+      try {
+        const out = await require('./recorder-bot').stopRecording(job);
+        if (job.mode === 'agora-web') {
+          if (out.mp4) {
+            await require('./device-recording').attachRecordingFile({ kind: 'group', groupId: ref.id, sessionId: sid, durationSec: Math.round((Date.now() - Number(job.startedAtMs || Date.now())) / 1000) }, out.mp4);
+          } else {
+            const err = 'لم يُنتج ملف تسجيل (تحقق من صفحة التسجيل وإعدادات Agora)';
+            await rRef.set({ status: 'failed', error: err }, { merge: true });
+            await lRef.set({ status: 'failed', error: err }, { merge: true });
+          }
+        }
+      } catch (e) {
+        console.error('stop recording failed', e);
+        const err = `تعذر إنهاء التسجيل: ${String(e?.message || e).slice(0, 220)}`;
+        await rRef.set({ status: 'failed', error: err }, { merge: true });
+        await lRef.set({ status: 'failed', error: err }, { merge: true });
+      }
+    }
   }
   return { ok: true, recording: !!d.record };
 });

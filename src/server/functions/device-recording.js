@@ -37,8 +37,9 @@ function buildIstifhamRecordingBase(r, requestId, now = Date.now()) {
   };
 }
 
-/** يحدد نوع التسجيل ويتحقق من الصلاحية ويرجع { kind, key, ... }. */
-async function resolveTarget(uid, data, { requireActive = false } = {}) {
+/** يحدد نوع التسجيل ويتحقق من الصلاحية ويرجع { kind, key, ... }. uid = null ⇒ البوت (سر المنصة تحقق منه الـ route). */
+async function resolveTarget(uid, data) {
+  const bot = uid === null;
   const kind = data?.kind === 'istifham' ? 'istifham' : 'group';
   if (kind === 'istifham') {
     const requestId = String(data?.requestId || '').trim();
@@ -46,7 +47,7 @@ async function resolveTarget(uid, data, { requireActive = false } = {}) {
     const ref = db.collection('istifhams').doc(requestId);
     const r = (await ref.get()).data();
     if (!r) throw new HttpsError('not-found', 'المحاضرة غير موجودة');
-    if (uid !== r.mufhemId && uid !== r.mustafhemId && !(await isAdminUid(uid))) throw new HttpsError('permission-denied', 'لست من أطراف هذه المحاضرة');
+    if (!bot && uid !== r.mufhemId && uid !== r.mustafhemId && !(await isAdminUid(uid))) throw new HttpsError('permission-denied', 'لست من أطراف هذه المحاضرة');
     return { kind, requestId, ref, r, key: `sessions/${requestId}/${requestId}.mp4` };
   }
   // مجموعة: من يملك صلاحية إدارة الجلسات
@@ -56,18 +57,25 @@ async function resolveTarget(uid, data, { requireActive = false } = {}) {
   const ref = db.collection('groups').doc(gid);
   const g = (await ref.get()).data();
   if (!g) throw new HttpsError('not-found', 'المجموعة غير موجودة');
-  let allowed = g.ownerUid === uid;
-  if (!allowed) {
-    const m = (await ref.collection('members').doc(uid).get()).data();
-    allowed = !!(m && m.role === 'editor' && m.permissions && m.permissions.manageSessions === true);
+  if (!bot) {
+    let allowed = g.ownerUid === uid;
+    if (!allowed) {
+      const m = (await ref.collection('members').doc(uid).get()).data();
+      allowed = !!(m && m.role === 'editor' && m.permissions && m.permissions.manageSessions === true);
+    }
+    if (!allowed && !(await isAdminUid(uid))) throw new HttpsError('permission-denied', 'غير مسموح برفع تسجيل هذه الجلسة');
   }
-  if (!allowed && !(await isAdminUid(uid))) throw new HttpsError('permission-denied', 'غير مسموح برفع تسجيل هذه الجلسة');
   return { kind, gid, sid, ref, g, key: `groups/${gid}/recordings/${sid}.mp4` };
 }
 
 exports.createRecordingUploadUrl = onCall(async (request) => {
   const uid = reqUid(request);
   const t = await resolveTarget(uid, request.data);
+  return uploadUrlCore(t, request.data);
+});
+
+async function uploadUrlCore(t, data) {
+  const request = { data };
   const size = Math.max(0, Math.floor(Number(request.data?.size || 0)));
   if (size > MAX_BYTES) throw new HttpsError('invalid-argument', 'حجم التسجيل أكبر من الحد المسموح (2 جيجابايت)');
   const signed = presignedUrl({ method: 'PUT', key: t.key, expiresSeconds: 6 * 3600, contentType: 'video/mp4' });
@@ -86,7 +94,7 @@ exports.createRecordingUploadUrl = onCall(async (request) => {
     if (!(l1.data()?.status === 'ready')) await lRef.set({ kind: 'group', groupId: t.gid, groupName: t.g.name || '', ownerUid: t.g.ownerUid || '', ownerName: t.g.ownerName || '', sessionId: t.sid, title: l1.data()?.title || r1.data()?.title || `جلسة ${t.sid}`, status: 'uploading', error: '', r2Key: t.key, uploadStartedAtMs: now, ...(l1.exists ? {} : { size: 0, durationSec: 0, createdAt: FV.serverTimestamp(), order: now }) }, { merge: true });
   }
   return { url: signed.url, key: t.key };
-});
+}
 
 /** يتأكد أن الملف موجود في R2 فعلًا وحجمه معقول. */
 async function r2Head(key) {
@@ -100,10 +108,16 @@ async function r2Head(key) {
 exports.completeClientRecording = onCall(async (request) => {
   const uid = reqUid(request);
   const t = await resolveTarget(uid, request.data);
+  return completeCore(t, request.data, 'device');
+});
+
+async function completeCore(t, data, source, keyOverride) {
+  const request = { data };
+  const key = keyOverride || t.key;
   const durationSec = Math.max(0, Math.floor(Number(request.data?.durationSec || 0)));
   // لا نعتبر التسجيل جاهزًا إلا بعد التأكد أن الملف وصل التخزين بالفعل
-  let head = await r2Head(t.key);
-  for (let i = 0; i < 3 && (!head.ok || head.size < 1024); i++) { await new Promise((r) => setTimeout(r, 1500)); head = await r2Head(t.key); }
+  let head = await r2Head(key);
+  for (let i = 0; i < 3 && (!head.ok || head.size < 1024); i++) { await new Promise((r) => setTimeout(r, 1500)); head = await r2Head(key); }
   if (!head.ok || head.size < 1024) throw new HttpsError('failed-precondition', 'الملف لم يصل إلى التخزين بعد، أعد المحاولة');
   const now = Date.now();
   if (t.kind === 'istifham') {
@@ -111,24 +125,29 @@ exports.completeClientRecording = onCall(async (request) => {
     await t.ref.update({ recordingStopped: true, recordingOpen: false, recordingEndedAtMs: now });
     const r = (await t.ref.get()).data() || t.r;
     await db.collection('sessionRecordings').doc(t.requestId).set({
-      ...buildIstifhamRecordingBase(r, t.requestId, now), r2Key: t.key, status: 'ready', error: '', source: 'device', size: head.size, durationSec, savedAtMs: now,
+      ...buildIstifhamRecordingBase(r, t.requestId, now), r2Key: key, status: 'ready', error: '', source, size: head.size, durationSec, savedAtMs: now,
     }, { merge: true });
   } else {
     const rRef = t.ref.collection('recordings').doc(t.sid);
     const lRef = db.collection('lectureRecordings').doc(t.sid);
     const prev = (await rRef.get()).data() || {};
     const prevSize = prev.status === 'ready' ? Number(prev.size || 0) : 0;
-    await rRef.set({ r2Key: t.key, status: 'ready', error: '', source: 'device', size: head.size, durationSec, savedAtMs: now }, { merge: true });
-    await lRef.set({ r2Key: t.key, status: 'ready', error: '', source: 'device', size: head.size, durationSec, readyAt: FV.serverTimestamp() }, { merge: true });
+    await rRef.set({ r2Key: key, status: 'ready', error: '', source, size: head.size, durationSec, savedAtMs: now }, { merge: true });
+    await lRef.set({ r2Key: key, status: 'ready', error: '', source, size: head.size, durationSec, readyAt: FV.serverTimestamp() }, { merge: true });
     // عدّاد التخزين: نضيف الفرق فقط (إعادة الرفع لا تضاعف الحجم)
     if (head.size !== prevSize) await t.ref.update({ storageBytes: FV.increment(head.size - prevSize) });
   }
   return { ok: true, size: head.size };
-});
+}
 
 exports.failClientRecording = onCall(async (request) => {
   const uid = reqUid(request);
   const t = await resolveTarget(uid, request.data);
+  return failCore(t, request.data);
+});
+
+async function failCore(t, data) {
+  const request = { data };
   const error = String(request.data?.error || 'فشل التسجيل').slice(0, 300);
   const now = Date.now();
   if (t.kind === 'istifham') {
@@ -144,6 +163,61 @@ exports.failClientRecording = onCall(async (request) => {
     if (l1.data()?.status !== 'ready') await lRef.set({ kind: 'group', groupId: t.gid, groupName: t.g.name || '', ownerUid: t.g.ownerUid || '', ownerName: t.g.ownerName || '', sessionId: t.sid, title: l1.data()?.title || `جلسة ${t.sid}`, status: 'failed', error, ...(l1.exists ? {} : { size: 0, durationSec: 0, createdAt: FV.serverTimestamp(), order: now }) }, { merge: true });
   }
   return { ok: true };
+}
+
+/** واجهات البوت (يتحقق الـ route من سر البوت قبل الاستدعاء). */
+module.exports.botUploadUrl = async (data) => uploadUrlCore(await resolveTarget(null, data), data);
+module.exports.botComplete = async (data) => completeCore(await resolveTarget(null, data), data, 'bot');
+module.exports.botFail = async (data) => failCore(await resolveTarget(null, data), data);
+
+/** تسجيل Agora web: الملف كتبته Agora مباشرة في R2 باسم key. نتحقق من وجوده ثم نعلّم «جاهز»، وإلا «بانتظار الرفع» ويُعاد الفحص لاحقًا. */
+module.exports.attachRecordingFile = async (data, key) => {
+  const t = await resolveTarget(null, data);
+  const expectedPrefix = t.kind === 'istifham' ? `sessions/${t.requestId}/` : `groups/${t.gid}/`;
+  if (!key || !key.startsWith(expectedPrefix) || key.includes('..')) throw new HttpsError('invalid-argument', 'مسار الملف غير صحيح');
+  let head = await r2Head(key);
+  for (let i = 0; i < 4 && (!head.ok || head.size < 1024); i++) { await new Promise((r) => setTimeout(r, 4000)); head = await r2Head(key); }
+  if (head.ok && head.size >= 1024) return completeCore(t, { durationSec: Number(data?.durationSec || 0) }, 'agora-web', key);
+  // لم يظهر بعد: نحفظ المسار وننتظر (يُفحص عند فتح التسجيلات أو بالـ cron)
+  if (t.kind === 'istifham') {
+    await db.collection('sessionRecordings').doc(t.requestId).set({ r2Key: key, status: 'uploading', error: 'بانتظار وصول الملف إلى التخزين' }, { merge: true });
+  } else {
+    await t.ref.collection('recordings').doc(t.sid).set({ r2Key: key, status: 'uploading', error: '' }, { merge: true });
+    await db.collection('lectureRecordings').doc(t.sid).set({ r2Key: key, status: 'uploading', error: '' }, { merge: true });
+  }
+  return { ok: true, pending: true };
+};
+
+/** يفحص تسجيلات المجموعات المعلّقة (uploading + r2Key) ويجعل الموجود في R2 «جاهز». */
+async function refreshUploadingGroupRecordings(groupId) {
+  let q = db.collection('lectureRecordings').where('status', '==', 'uploading');
+  if (groupId) q = q.where('groupId', '==', groupId);
+  const snap = await q.get();
+  let updated = 0;
+  for (const d of snap.docs) {
+    const m = d.data();
+    if (!m.r2Key) continue;
+    const head = await r2Head(String(m.r2Key));
+    if (!head.ok || head.size < 1024) continue;
+    const gid = String(m.groupId || ''); const sid = String(m.sessionId || d.id);
+    await d.ref.set({ status: 'ready', error: '', size: head.size, readyAt: FV.serverTimestamp() }, { merge: true });
+    if (gid) {
+      const gRef = db.collection('groups').doc(gid);
+      const rRef = gRef.collection('recordings').doc(sid);
+      const prev = (await rRef.get()).data() || {};
+      await rRef.set({ status: 'ready', error: '', size: head.size, r2Key: m.r2Key, savedAtMs: Date.now() }, { merge: true });
+      if (prev.status !== 'ready') await gRef.update({ storageBytes: FV.increment(head.size) }).catch(() => {});
+    }
+    updated++;
+  }
+  return updated;
+}
+module.exports.refreshUploadingGroupRecordings = refreshUploadingGroupRecordings;
+exports.refreshGroupRecordings = onCall(async (request) => {
+  reqUid(request);
+  const groupId = String(request.data?.groupId || '').trim();
+  if (!groupId) throw new HttpsError('invalid-argument', 'المجموعة غير محددة');
+  return { ok: true, updated: await refreshUploadingGroupRecordings(groupId) };
 });
 
 module.exports.buildIstifhamRecordingBase = buildIstifhamRecordingBase;

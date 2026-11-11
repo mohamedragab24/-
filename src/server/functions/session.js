@@ -112,20 +112,27 @@ exports.startIstifhamRecording = onCall(async (request) => {
   const uid = reqUid(request);
   const requestId = String(request.data?.requestId || '').trim();
   const { ref, r } = await loadParticipantRequest(uid, requestId);
-  // بوت المنصة يسجّل الجلسة كاملة (لا تسجيل على أجهزة الأطراف). نحجز البدء بمعاملة حتى لا يبدأ بوتان
-  // لو دخل الطرفان في نفس اللحظة.
-  const claimed = await db.runTransaction(async (tx) => {
+  // التسجيل عبر «بوت فهمت»: ينضم للقناة كمشاهد خفي ويسجّل الجلسة كاملة ثم يرفعها إلى R2 (بدون أي إجراء من المُفهم أو المستفهم)
+  if (r.recordingOpen || r.recordingStopped || r.recordingJob) return { ok: true, already: true };
+  const lock = await db.runTransaction(async (tx) => {
     const cur = (await tx.get(ref)).data() || {};
-    if (cur.recordingStopped || cur.recordingBotStarting || (cur.recordingOpen && cur.recordingMode === 'bot')) return false;
-    tx.update(ref, { recordingMode: 'bot', recordingBotStarting: true, recordingStartedAtMs: cur.recordingStartedAtMs || Date.now() });
+    if (cur.recordingJob || cur.recordingStarting) return false;
+    tx.update(ref, { recordingStarting: true });
     return true;
   });
-  if (!claimed) return { ok: true, already: true };
-  const bot = await require('./bot-recording').startIstifham(requestId);
-  await ref.update(bot.ok
-    ? { recordingOpen: true, recordingBotStarting: false, recordingBotError: '' }
-    : { recordingOpen: false, recordingBotStarting: false, recordingMode: 'bot-failed', recordingBotError: String(bot.error || '').slice(0, 300) });
-  return { ok: bot.ok === true };
+  if (!lock) return { ok: true, already: true };
+  try {
+    const state = await require('./recorder-bot').dispatchRecording({ kind: 'istifham', requestId, title: String(r.title || '') });
+    await ref.update({ recordingMode: state.mode, recordingJob: state, recordingBotJob: state.jobId || '', recordingOpen: true, recordingStarting: false, recordingStartedAtMs: Date.now(), recordingError: FV.delete() });
+    return { ok: true };
+  } catch (e) {
+    const msg = String(e?.message || e).slice(0, 300);
+    console.error('istifham bot dispatch failed', e);
+    await ref.update({ recordingStarting: false, recordingError: msg });
+    const out = db.collection('sessionRecordings').doc(requestId);
+    await out.set({ requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, title: String(r.title || ''), status: 'failed', error: msg, adminExpiresAt: Date.now() + 2 * 24 * 3600 * 1000, createdAt: FV.serverTimestamp() }, { merge: true });
+    return { ok: false, error: 'تعذر بدء تسجيل الجلسة' };
+  }
 });
 
 /** المشاركون يختارون حفظ التسجيل عند المستفهم. data: { requestId, days: 0|1|10|15|30 } (0 = لا أريد الحفظ) */
@@ -152,15 +159,20 @@ async function finalizeIstifhamRecording(ref, r, requestId) {
     return true;
   });
   if (!won) return { ok: true, already: true };
-  // جلسة مسجَّلة بالبوت: نوقفه ونربط الملف
-  if (r.recordingMode === 'bot' || r.recordingMode === 'bot-failed') {
+  const job = r.recordingJob || (r.recordingBotJob ? { mode: 'bot', jobId: r.recordingBotJob } : null);
+  if (job) {
     try {
-      const b = await require('./bot-recording').finishIstifham(requestId);
-      if (b.handled) return { ok: true, status: b.status === 'done' ? 'ready' : b.status };
-    } catch (e) { console.error('bot finish failed', requestId, e); }
-    const { buildIstifhamRecordingBase: base } = require('./device-recording');
-    await db.collection('sessionRecordings').doc(requestId).set({ ...base(r, requestId, Date.now()), r2Key: '', status: 'failed', error: 'لم يبدأ بوت التسجيل لهذه الجلسة', createdAt: FV.serverTimestamp() }, { merge: true });
-    return { ok: true, status: 'failed' };
+      const res = await require('./recorder-bot').stopRecording(job);
+      if (job.mode === 'agora-web') {
+        if (res.mp4) {
+          const att = await require('./device-recording').attachRecordingFile({ kind: 'istifham', requestId, durationSec: Math.round((Date.now() - Number(job.startedAtMs || Date.now())) / 1000) }, res.mp4);
+          if (att && !att.pending) return { ok: true, status: 'ready' };
+        } else {
+          await db.collection('sessionRecordings').doc(requestId).set({ requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, title: String(r.title || ''), status: 'failed', error: 'لم يُنتج ملف تسجيل', adminExpiresAt: Date.now() + 2 * 24 * 3600 * 1000, createdAt: FV.serverTimestamp() }, { merge: true });
+          return { ok: false, status: 'failed' };
+        }
+      }
+    } catch (e) { console.error('stop recording failed', e); }
   }
   const out = db.collection('sessionRecordings').doc(requestId);
   const cur = (await out.get()).data();
@@ -192,9 +204,6 @@ exports.adminRetrySessionRecording = onCall(async (request) => {
   const ref = db.collection('sessionRecordings').doc(requestId);
   const d = (await ref.get()).data();
   if (!d) throw new HttpsError('not-found', 'التسجيل غير موجود');
-  if (d.source === 'bot' || d.status === 'processing') {
-    try { if (await require('./bot-recording').confirmPending(require('./bot-recording').iid(requestId))) return { ok: true, status: 'ready' }; } catch (e) { console.error('confirm bot failed', e); }
-  }
   const key = d.r2Key || `sessions/${requestId}/${requestId}.mp4`;
   const exists = await r2FileExists(key);
   await ref.update(exists
@@ -258,12 +267,12 @@ exports.adminResolveSessionComplaint = onCall(async (request) => {
 /** تنظيف المنتهي (يستدعيها الـ cron اليومي). */
 async function cleanupExpiredRecordings() {
   const now = Date.now();
+  try { await require('./device-recording').refreshUploadingGroupRecordings(); } catch (e) { console.error('refresh group recordings failed', e); }
   // جلسات انقطعت دون إنهاء (إغلاق التطبيق/انقطاع الإنترنت): نُنهي تسجيلها بعد 45 دقيقة من البدء
   let finalized = 0;
   const open = await db.collection('istifhams').where('recordingOpen', '==', true).get();
   for (const doc of open.docs) {
     const r = doc.data();
-    if (r.recordingMode === 'bot') continue; // جلسات البوت يتابعها bot-recording.sweep (تتحقق أن البوت توقف فعلًا)
     if (now - Number(r.recordingStartedAtMs || 0) > 45 * 60 * 1000) {
       try { await finalizeIstifhamRecording(doc.ref, r, doc.id); finalized++; } catch (e) { console.error('finalize abandoned failed', doc.id, e); }
     }
@@ -296,8 +305,6 @@ async function cleanupExpiredRecordings() {
       trimmed++; // الإدارة انتهت مدتها لكن المستفهم لسه محتفظ بنسخة: الملف يبقى حتى انتهاء مدة المستفهم
     }
   }
-  let bots = {};
-  try { bots = await require('./bot-recording').sweep(); } catch (e) { console.error('bot sweep failed', e); }
-  return { removed, trimmed, finalized, bots };
+  return { removed, trimmed, finalized };
 }
 exports._cleanupExpiredRecordings = cleanupExpiredRecordings;

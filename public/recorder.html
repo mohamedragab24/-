@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>Fahmt Recorder</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+  html,body{margin:0;width:1280px;height:720px;overflow:hidden;background:#0b0e13;color:#fff;font-family:'Noto Sans Arabic','Noto Naskh Arabic','Noto Sans',Arial,sans-serif}
+  #app{position:relative;width:1280px;height:720px}
+  #top{position:absolute;top:0;left:0;right:0;height:44px;background:#171b22;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:19px;box-sizing:border-box}
+  #top .t{font-weight:800}
+  #clock{direction:ltr;font-variant-numeric:tabular-nums;color:#9ca3af}
+  #main{position:absolute;top:44px;left:0;width:1280px;height:676px}
+  /* شبكة المشاركين (لا سبورة ولا ملف) */
+  #grid{position:absolute;inset:0;display:grid;gap:8px;padding:8px;box-sizing:border-box}
+  .tile{position:relative;background:#1e232d;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:0;min-width:0}
+  .tile .vid{position:absolute;inset:0}
+  .tile .vid video{object-fit:contain !important}
+  .tile .ava{width:88px;height:88px;border-radius:50%;background:#374151;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:800}
+  .tile .name{position:absolute;bottom:6px;right:8px;background:rgba(0,0,0,.55);padding:2px 10px;border-radius:8px;font-size:15px}
+  /* المسرح: سبورة أو ملف مشارَك */
+  #stageWrap{position:absolute;top:0;bottom:0;left:0;width:900px;display:none;align-items:center;justify-content:center;background:#0b0e13}
+  #stage{position:relative;height:660px;width:462px;background:#fff;border-radius:6px;overflow:hidden}
+  #stage canvas{position:absolute;inset:0}
+  #stageLabel{position:absolute;top:6px;right:10px;font-size:13px;color:#fff;background:rgba(0,0,0,.55);padding:2px 10px;border-radius:8px;z-index:3}
+  #side{position:absolute;top:0;bottom:0;right:0;width:380px;display:none;flex-direction:column;gap:8px;padding:8px;box-sizing:border-box}
+  #strip{display:grid;grid-template-columns:1fr 1fr;gap:8px;max-height:300px}
+  #strip .tile{height:140px}
+  #chat{position:absolute;bottom:8px;right:8px;width:364px;display:flex;flex-direction:column;gap:4px;z-index:5}
+  .msg{background:rgba(23,27,34,.92);border-radius:10px;padding:6px 10px;font-size:15px;line-height:1.4}
+  .msg b{color:#fbbf24}
+  #hands{position:absolute;top:56px;left:12px;z-index:6;font-size:15px}
+  #status{position:absolute;left:12px;bottom:8px;font-size:12px;color:#6b7280;z-index:6}
+</style>
+<script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.2.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <div id="top"><div class="t" id="title">جلسة</div><div id="clock">00:00</div></div>
+  <div id="main">
+    <div id="grid"></div>
+    <div id="stageWrap"><div id="stage"><canvas id="doc" width="462" height="660"></canvas><canvas id="ink" width="462" height="660"></canvas><div id="stageLabel"></div></div></div>
+    <div id="side"><div id="strip"></div></div>
+    <div id="chat"></div>
+    <div id="hands"></div>
+    <div id="status"></div>
+  </div>
+</div>
+<script>
+(function () {
+  // ===== المدخلات =====
+  var q = new URLSearchParams(location.search);
+  var APP_ID = q.get('appId'), CHANNEL = q.get('channel'), TOKEN = q.get('token'), UID = Number(q.get('uid') || 0);
+  document.getElementById('title').textContent = q.get('title') || 'جلسة';
+  var S = window.__botState = { joined: false, remoteCount: 0, everHadUsers: false, lastUserAt: 0, error: '', startedAt: Date.now(), msgs: 0 };
+
+  // ===== حالة الاجتماع (نفس بروتوكول تطبيق فهمت) =====
+  var COLORS = ['#000000', '#EF4444', '#29B6F6', '#22C55E', '#FF7043'];
+  var users = {};              // uid -> {name, tile, vidEl, videoTrack}
+  var names = {};
+  var boardOpen = false, fileUrl = null, fileName = '', fileKind = 'pdf';
+  var strokes = [], remote = {}, pageStash = {}, curPage = 0;
+  var chat = [], hands = {};
+  var pdfCache = {}, pdfDoc = null, docRenderId = 0;
+
+  var W = 462, H = 660;
+  var elGrid = document.getElementById('grid'), elWrap = document.getElementById('stageWrap'), elSide = document.getElementById('side'), elStrip = document.getElementById('strip');
+  var docC = document.getElementById('doc'), inkC = document.getElementById('ink'), dctx = docC.getContext('2d'), ictx = inkC.getContext('2d');
+  var elLabel = document.getElementById('stageLabel');
+
+  function nameOf(uid) { return names[uid] || ('مشارك ' + String(uid).slice(-3)); }
+
+  // ===== المشاركون =====
+  function ensureUser(uid) {
+    if (users[uid]) return users[uid];
+    var tile = document.createElement('div'); tile.className = 'tile';
+    var vid = document.createElement('div'); vid.className = 'vid';
+    var ava = document.createElement('div'); ava.className = 'ava';
+    var nm = document.createElement('div'); nm.className = 'name';
+    tile.appendChild(ava); tile.appendChild(vid); tile.appendChild(nm);
+    users[uid] = { uid: uid, tile: tile, vid: vid, ava: ava, nm: nm, track: null };
+    refreshUser(uid);
+    layout();
+    return users[uid];
+  }
+  function refreshUser(uid) {
+    var u = users[uid]; if (!u) return;
+    var n = nameOf(uid);
+    u.nm.textContent = n;
+    u.ava.textContent = (n || '?').trim().charAt(0);
+    u.ava.style.display = u.track ? 'none' : 'flex';
+  }
+  function layout() {
+    var list = Object.keys(users).map(function (k) { return users[k]; });
+    var staged = boardOpen || !!fileUrl;
+    elGrid.style.display = staged ? 'none' : 'grid';
+    elWrap.style.display = staged ? 'flex' : 'none';
+    elSide.style.display = staged ? 'flex' : 'none';
+    if (!staged) {
+      var n = Math.max(1, list.length);
+      var cols = n <= 1 ? 1 : (n <= 4 ? 2 : 3);
+      elGrid.style.gridTemplateColumns = 'repeat(' + cols + ',1fr)';
+      elGrid.style.gridTemplateRows = 'repeat(' + Math.ceil(n / cols) + ',1fr)';
+      list.forEach(function (u) { elGrid.appendChild(u.tile); });
+      if (list.length === 0) { elGrid.innerHTML = '<div style="grid-column:1/-1;display:flex;align-items:center;justify-content:center;font-size:26px;color:#6b7280">بانتظار المشاركين…</div>'; }
+    } else {
+      // نُظهر أصحاب الفيديو أولًا في الشريط الجانبي (مثلًا شاشة مشاركة)
+      list.sort(function (a, b) { return (b.track ? 1 : 0) - (a.track ? 1 : 0); });
+      list.slice(0, 6).forEach(function (u) { elStrip.appendChild(u.tile); });
+      elLabel.textContent = boardOpen ? 'السبورة التفاعلية' : ('ملف: ' + (fileName || ''));
+    }
+  }
+
+  // ===== السبورة/الملف =====
+  function segDist(px, py, ax, ay, bx, by) {
+    var abx = bx - ax, aby = by - ay, l2 = abx * abx + aby * aby;
+    if (l2 === 0) return Math.hypot(px - ax, py - ay);
+    var t = ((px - ax) * abx + (py - ay) * aby) / l2; t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (ax + abx * t), py - (ay + aby * t));
+  }
+  function eraseAt(px, py, r) {
+    var out = [];
+    strokes.forEach(function (s) {
+      var pts = s.pts;
+      if (pts.length === 1) { if (Math.hypot(pts[0].x - px, pts[0].y - py) >= r) out.push(s); return; }
+      var cur = [];
+      function flush() { if (cur.length >= 2) out.push({ id: s.id, color: s.color, w: s.w, h: s.h, pts: cur }); cur = []; }
+      for (var i = 0; i + 1 < pts.length; i++) {
+        if (segDist(px, py, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y) >= r) { if (!cur.length) cur.push(pts[i]); cur.push(pts[i + 1]); } else flush();
+      }
+      flush();
+    });
+    strokes = out; remote = {};
+  }
+  function redraw() {
+    ictx.clearRect(0, 0, W, H);
+    if (boardOpen) { ictx.fillStyle = '#ffffff'; ictx.fillRect(0, 0, W, H); }
+    strokes.forEach(function (s) {
+      if (!s.pts.length) return;
+      ictx.strokeStyle = s.color; ictx.globalAlpha = s.h ? 0.38 : 1; ictx.lineWidth = Math.max(1.5, s.w * (W / 360));
+      ictx.lineCap = 'round'; ictx.lineJoin = 'round';
+      ictx.beginPath();
+      s.pts.forEach(function (p, i) { var x = p.x * W, y = p.y * H; if (i === 0) ictx.moveTo(x, y); else ictx.lineTo(x, y); });
+      if (s.pts.length === 1) ictx.lineTo(s.pts[0].x * W + .1, s.pts[0].y * H + .1);
+      ictx.stroke();
+    });
+    ictx.globalAlpha = 1;
+  }
+  function switchPage(p) {
+    if (p < 0 || p === curPage) return;
+    pageStash[curPage] = strokes.slice(); strokes = (pageStash[p] || []).slice(); remote = {}; curPage = p;
+  }
+  function resetDoc() { strokes = []; remote = {}; pageStash = {}; curPage = 0; pdfDoc = null; }
+
+  async function renderDoc() {
+    var my = ++docRenderId;
+    dctx.fillStyle = '#ffffff'; dctx.fillRect(0, 0, W, H);
+    if (!fileUrl) return;
+    try {
+      if (fileKind === 'img') {
+        var img = new Image(); img.crossOrigin = 'anonymous';
+        await new Promise(function (res, rej) { img.onload = res; img.onerror = rej; img.src = fileUrl; });
+        if (my !== docRenderId) return;
+        var sc = Math.min(W / img.width, H / img.height);
+        dctx.drawImage(img, (W - img.width * sc) / 2, (H - img.height * sc) / 2, img.width * sc, img.height * sc);
+      } else {
+        if (!pdfDoc || pdfDoc.__url !== fileUrl) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          pdfDoc = await pdfjsLib.getDocument(fileUrl).promise; pdfDoc.__url = fileUrl;
+        }
+        var pg = await pdfDoc.getPage(Math.min(pdfDoc.numPages, curPage + 1));
+        var vp0 = pg.getViewport({ scale: 1 }); var sc2 = Math.min(W / vp0.width, H / vp0.height);
+        var vp = pg.getViewport({ scale: sc2 });
+        var tmp = document.createElement('canvas'); tmp.width = Math.ceil(vp.width); tmp.height = Math.ceil(vp.height);
+        await pg.render({ canvasContext: tmp.getContext('2d'), viewport: vp }).promise;
+        if (my !== docRenderId) return;
+        dctx.drawImage(tmp, (W - tmp.width) / 2, (H - tmp.height) / 2);
+      }
+    } catch (e) { S.error = 'doc: ' + e; dctx.fillStyle = '#9ca3af'; dctx.font = '20px sans-serif'; dctx.fillText('تعذر عرض الملف', 20, 40); }
+  }
+
+  // ===== رسائل البيانات =====
+  function handle(from, m) {
+    S.msgs++;
+    switch (m.t) {
+      case 'n': names[from] = String(m.n || ''); if (users[from]) refreshUser(from); else if (m.mod === 1 || true) ensureUser(from); break;
+      case 'h': if (m.v === 1) hands[from] = true; else delete hands[from]; showHands(); break;
+      case 'c': { var t = String(m.x || ''); if (!t.trim()) break; chat.push({ n: String(m.n || nameOf(from)), x: t, at: Date.now() }); chat = chat.slice(-6); showChat(); break; }
+      case 'b': boardOpen = m.o === 1; if (!boardOpen) { strokes = []; remote = {}; } layout(); redraw(); break;
+      case 's': {
+        var pts = m.p || [], id = m.i, st = remote[id];
+        if (!st) { var base = COLORS[Math.max(0, Math.min(COLORS.length - 1, m.c | 0))]; st = { id: id, color: base, w: Number(m.w) || 3, h: m.h === 1, pts: [] }; remote[id] = st; strokes.push(st); }
+        for (var i = 0; i + 1 < pts.length; i += 2) st.pts.push({ x: Number(pts[i]), y: Number(pts[i + 1]) });
+        redraw(); break;
+      }
+      case 'x': strokes = []; remote = {}; redraw(); break;
+      case 'e': eraseAt(Number(m.x), Number(m.y), Number(m.r)); redraw(); break;
+      case 'f': { var isNew = fileUrl !== m.u; fileUrl = String(m.u); fileName = String(m.n || ''); fileKind = String(m.k || 'pdf'); if (isNew) resetDoc(); layout(); renderDoc().then(redraw); break; }
+      case 'fc': fileUrl = null; fileName = ''; resetDoc(); layout(); redraw(); break;
+      case 'g': switchPage(Number(m.p) | 0); renderDoc().then(redraw); break;
+    }
+  }
+  function showChat() {
+    var el = document.getElementById('chat');
+    el.innerHTML = chat.map(function (c) { return '<div class="msg"><b>' + esc(c.n) + ':</b> ' + esc(c.x) + '</div>'; }).join('');
+  }
+  function showHands() {
+    var ids = Object.keys(hands);
+    document.getElementById('hands').textContent = ids.length ? ('✋ ' + ids.map(function (u) { return nameOf(u); }).join('، ')) : '';
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  // ===== Agora =====
+  async function start() {
+    try {
+      var client = AgoraRTC.createClient({ mode: 'live', codec: 'vp8' });
+      await client.setClientRole('audience');
+      client.on('user-joined', function (u) { ensureUser(u.uid); });
+      client.on('user-left', function (u) { var x = users[u.uid]; if (x) { x.tile.remove(); delete users[u.uid]; delete hands[u.uid]; layout(); showHands(); } });
+      client.on('user-published', async function (u, type) {
+        try {
+          await client.subscribe(u, type);
+          var usr = ensureUser(u.uid);
+          if (type === 'video') { usr.track = u.videoTrack; u.videoTrack.play(usr.vid); refreshUser(u.uid); layout(); }
+          if (type === 'audio') u.audioTrack.play();
+        } catch (e) { S.error = 'subscribe: ' + e; }
+      });
+      client.on('user-unpublished', function (u, type) { if (type === 'video' && users[u.uid]) { users[u.uid].track = null; refreshUser(u.uid); } });
+      client.on('stream-message', function (uid, data) {
+        try { handle(uid, JSON.parse(new TextDecoder('utf-8').decode(data))); } catch (e) { /* رسالة غير مفهومة */ }
+      });
+      await client.join(APP_ID, CHANNEL, TOKEN || null, UID);
+      S.joined = true;
+      setInterval(function () {
+        var n = client.remoteUsers.length; S.remoteCount = n;
+        if (n > 0) { S.everHadUsers = true; S.lastUserAt = Date.now(); }
+        var s = Math.floor((Date.now() - S.startedAt) / 1000);
+        document.getElementById('clock').textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+      }, 1000);
+    } catch (e) { S.error = 'join: ' + e; document.getElementById('status').textContent = 'خطأ: ' + e; }
+  }
+  layout(); redraw();
+  start();
+})();
+</script>
+</body>
+</html>
