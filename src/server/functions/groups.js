@@ -489,7 +489,7 @@ exports.endGroupSession = onCall(async (request) => {
           if (out.mp4) {
             await require('./device-recording').attachRecordingFile({ kind: 'group', groupId: ref.id, sessionId: sid, durationSec: Math.round((Date.now() - Number(job.startedAtMs || Date.now())) / 1000) }, out.mp4);
           } else {
-            const err = 'لم يُنتج ملف تسجيل (تحقق من صفحة التسجيل وإعدادات Agora)';
+            const err = `لم يُنتج ملف تسجيل — حالة الرفع: ${out.uploadingStatus || 'غير معروفة'}، الملفات: [${(out.files || []).join(', ') || 'لا شيء'}]${out.uploadingStatus === 'backuped' ? ' (تعذر الرفع إلى R2 فحُفظ احتياطيًا لدى Agora: راجع R2_* وصلاحيات المفتاح)' : ''} | ${out.raw || ''}`.slice(0, 300);
             await rRef.set({ status: 'failed', error: err }, { merge: true });
             await lRef.set({ status: 'failed', error: err }, { merge: true });
           }

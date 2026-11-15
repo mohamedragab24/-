@@ -33,9 +33,14 @@ export default function AdminSessionRecordings() {
     try {
       const r: any = await httpsCallable(fns(), "adminAgoraRecordingCheck")({});
       const d = r.data || {};
-      if (d.missingVars?.length) { toast({ variant: "destructive", title: "متغيرات ناقصة في Vercel", description: d.missingVars.join(", ") }); return; }
-      if (d.acquire?.ok) toast({ title: "إعدادات Agora سليمة", description: "تم حجز مورد تسجيل بنجاح." });
-      else toast({ variant: "destructive", title: "فشل اختبار Agora", description: d.acquire?.error || "سبب غير معروف" });
+      const lines: string[] = [];
+      if (d.missingVars?.length) lines.push("متغيرات ناقصة في Vercel: " + d.missingVars.join(", "));
+      if (d.project) lines.push(d.project.ok ? `✔ بيانات Agora صحيحة (المشروع: ${d.project.name})` : `✘ بيانات Agora: ${d.project.error}`);
+      if (d.acquire) lines.push(d.acquire.ok ? "✔ حجز مورد تسجيل الصفحات نجح" : `✘ حجز مورد تسجيل الصفحات: ${d.acquire.error}`);
+      if (d.page) lines.push(d.page.ok ? "✔ صفحة recorder.html تفتح (200)" : `✘ صفحة التسجيل: HTTP ${d.page.status || "?"}${d.page.location ? " ← إعادة توجيه إلى " + d.page.location : ""} ${d.page.error || ""}`);
+      const bad = lines.some((l) => l.startsWith("✘") || l.startsWith("متغيرات"));
+      window.alert(lines.join("\n") || "لا نتائج");
+      toast({ variant: bad ? "destructive" : "default", title: bad ? "فيه مشكلة في إعدادات التسجيل" : "إعدادات التسجيل سليمة" });
     } catch (e: any) { toast({ variant: "destructive", title: "تعذر الفحص", description: e?.message }); }
   };
   const retry = async (id: string) => {
@@ -60,6 +65,7 @@ export default function AdminSessionRecordings() {
         <h1 className="text-3xl font-black">تسجيلات جلسات الاستفهام</h1>
         <p className="text-muted-foreground">يُسجَّل من جهاز المُفهم ويُرفع إلى R2. يُحفظ للإدارة فقط ويُحذف تلقائيًا بعد يومين، أو 14 يومًا كحد أقصى لو قُدّمت شكوى ولم ننهِ الرد عليها.</p>
       </div>
+      <Button variant="outline" onClick={checkAgora} className="font-black">فحص إعدادات التسجيل (Agora + صفحة التسجيل)</Button>
       <Card className="rounded-3xl overflow-hidden">
         <Table>
           <TableHeader><TableRow><TableHead className="text-right">الجلسة</TableHead><TableHead className="text-right">الحالة</TableHead><TableHead className="text-right">يُحذف بعد</TableHead><TableHead className="text-right">حفظ عند المستفهم</TableHead><TableHead className="text-right">إجراء</TableHead></TableRow></TableHeader>

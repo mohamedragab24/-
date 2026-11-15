@@ -131,7 +131,7 @@ exports.startIstifhamRecording = onCall(async (request) => {
     await ref.update({ recordingStarting: false, recordingError: msg });
     const out = db.collection('sessionRecordings').doc(requestId);
     await out.set({ requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, title: String(r.title || ''), status: 'failed', error: msg, adminExpiresAt: Date.now() + 2 * 24 * 3600 * 1000, createdAt: FV.serverTimestamp() }, { merge: true });
-    return { ok: false, error: 'تعذر بدء تسجيل الجلسة' };
+    return { ok: false, error: msg };
   }
 });
 
@@ -168,7 +168,7 @@ async function finalizeIstifhamRecording(ref, r, requestId) {
           const att = await require('./device-recording').attachRecordingFile({ kind: 'istifham', requestId, durationSec: Math.round((Date.now() - Number(job.startedAtMs || Date.now())) / 1000) }, res.mp4);
           if (att && !att.pending) return { ok: true, status: 'ready' };
         } else {
-          await db.collection('sessionRecordings').doc(requestId).set({ requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, title: String(r.title || ''), status: 'failed', error: 'لم يُنتج ملف تسجيل', adminExpiresAt: Date.now() + 2 * 24 * 3600 * 1000, createdAt: FV.serverTimestamp() }, { merge: true });
+          await db.collection('sessionRecordings').doc(requestId).set({ requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, title: String(r.title || ''), status: 'failed', error: `لم يُنتج ملف تسجيل — حالة الرفع: ${res.uploadingStatus || 'غير معروفة'}، الملفات: [${(res.files || []).join(', ') || 'لا شيء'}] | ${res.raw || ''}`.slice(0, 300), adminExpiresAt: Date.now() + 2 * 24 * 3600 * 1000, createdAt: FV.serverTimestamp() }, { merge: true });
           return { ok: false, status: 'failed' };
         }
       }

@@ -33,8 +33,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isTransient = (e) => /allocate_timeout|timeout|temporar|busy|overload|region|5\d\d/i.test(String(e?.message || '')) || (e?.agoraStatus >= 500);
 
 /** يعيد المحاولة عند أخطاء Agora المؤقتة (مثل allocate_timeout). */
-async function call(c, path, body, tries = 5) {
+async function call(c, path, body, tries = 5, method = 'POST') {
   let last;
+  const trail = [];
   // بعض المشاريع يفشل فيها حجز المورد (allocate_timeout) بدون تحديد منطقة: نجرّب مناطق Agora بالتناوب
   const regions = (String(process.env.AGORA_RECORDING_REGION || '').trim() ? [String(process.env.AGORA_RECORDING_REGION).trim()] : ['', 'EU', 'AP', 'NA', 'EU']);
   for (let i = 0; i < tries; i++) {
@@ -42,10 +43,11 @@ async function call(c, path, body, tries = 5) {
       const r = regions[Math.min(i, regions.length - 1)];
       if (r) body.clientRequest.region = r; else delete body.clientRequest.region;
     }
-    try { return await callOnce(c, path, body); }
+    try { return await callOnce(c, path, body, method); }
     catch (e) {
       last = e;
-      if (!isTransient(e) || i === tries - 1) throw e;
+      trail.push(`${(body?.clientRequest?.region) || 'default'}@${c.useAltHost ? 'sd-rtn' : 'agora.io'}:${e.agoraStatus || '?'}`);
+      if (!isTransient(e) || i === tries - 1) { e.message = `${e.message} [المحاولات: ${trail.join(' | ')}]`; throw e; }
       if (i === 1) c.useAltHost = true; // بعد محاولتين: ننتقل لنطاق Agora البديل (api.sd-rtn.com)
       await sleep(2000 * (i + 1)); // backoff: 2s, 4s, 6s, 8s (توصية Agora لخطأ allocate_timeout)
     }
@@ -53,20 +55,23 @@ async function call(c, path, body, tries = 5) {
   throw last;
 }
 
-async function callOnce(c, path, body) {
+async function callOnce(c, path, body, method = 'POST') {
   const auth = Buffer.from(`${c.customerId}:${c.customerSecret}`).toString('base64');
   const host = c.useAltHost ? 'api.sd-rtn.com' : 'api.agora.io';
   const res = await fetch(`https://${host}/v1/apps/${c.appId}/cloud_recording/${path}`, {
-    method: 'POST',
+    method,
     headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json;charset=utf-8' },
-    body: JSON.stringify(body),
+    ...(method === 'GET' ? {} : { body: JSON.stringify(body) }),
   });
   let data = {};
-  try { data = await res.json(); } catch (_) {}
+  let text = '';
+  try { text = await res.text(); data = JSON.parse(text); } catch (_) {}
   if (!res.ok) {
-    const msg = `${data?.reason || data?.message || 'HTTP ' + res.status}${data?.code ? ' (code ' + data.code + ')' : ''}`;
-    const err = new Error(`Agora ${path.split('/').pop()}: ${msg}`);
+    const reason = data?.reason || data?.message || data?.error || (text ? text.slice(0, 160) : '');
+    const action = path.split('/').pop();
+    const err = new Error(`Agora ${action} فشل [HTTP ${res.status}${data?.code ? ` / code ${data.code}` : ''}]: ${reason || 'بدون تفاصيل'}`);
     err.agoraStatus = res.status;
+    err.agoraBody = text.slice(0, 300);
     throw err;
   }
   return data;
@@ -137,17 +142,31 @@ async function fileExists(key, tries = 5, delayMs = 3000) {
   return false;
 }
 
-/** فحص سريع للإعدادات: أي متغير ناقص + محاولة acquire حقيقية (بدون بدء تسجيل ولا تكلفة). */
+/** فحص سريع: المتغيرات الناقصة + صحة بيانات Agora + حجز مورد لتسجيل الصفحات (scene 1) + هل recorder.html يُفتح بلا إعادة توجيه. */
 async function checkConfig() {
   const c = cfg();
-  const missingVars = missing(c);
-  const out = { missingVars, acquire: null };
+  const out = { missingVars: missing(c), project: null, acquire: null, page: null };
   if (c.appId && c.customerId && c.customerSecret) {
     try {
-      const r = await call(c, 'acquire', { cname: `check_${Date.now()}`.slice(0, 40), uid: String(REC_UID), clientRequest: { resourceExpiredHour: 1, scene: 0 } }, 5);
+      const auth = Buffer.from(`${c.customerId}:${c.customerSecret}`).toString('base64');
+      const res = await fetch('https://api.agora.io/dev/v1/projects', { headers: { Authorization: `Basic ${auth}` } });
+      if (res.ok) {
+        const j = await res.json();
+        const list = Array.isArray(j?.projects) ? j.projects : [];
+        const hit = list.find((p) => String(p.vendor_key || '') === c.appId);
+        out.project = hit ? { ok: true, name: String(hit.name || '') } : { ok: false, error: `الـ App ID لا يتبع هذا الحساب (عدد المشاريع: ${list.length})` };
+      } else out.project = { ok: false, error: `رفضت Agora بيانات الدخول (HTTP ${res.status})` };
+    } catch (e) { out.project = { ok: false, error: String(e?.message || e) }; }
+    try {
+      const r = await call(c, 'acquire', { cname: `check_${Date.now()}`.slice(0, 40), uid: WEB_REC_UID, clientRequest: { resourceExpiredHour: 1, scene: 1 } }, 4);
       out.acquire = { ok: !!r.resourceId };
-    } catch (e) { out.acquire = { ok: false, error: String(e?.message || e), status: e?.agoraStatus || 0 }; }
+    } catch (e) { out.acquire = { ok: false, error: String(e?.message || e) }; }
   }
+  try {
+    const base = String(process.env.PLATFORM_URL || 'https://www.fahemt.online').replace(/\/+$/, '');
+    const res = await fetch(`${base}/recorder.html`, { redirect: 'manual' });
+    out.page = { ok: res.status === 200, status: res.status, location: res.headers.get('location') || '', url: `${base}/recorder.html` };
+  } catch (e) { out.page = { ok: false, error: String(e?.message || e) }; }
   return out;
 }
 
@@ -158,17 +177,28 @@ module.exports = { startRecording, stopRecording, fileExists, checkConfig };
 // وتسجّلها فيديو + صوت وترفعها إلى R2 — بدون أي سيرفر عندنا (لا VPS).
 const WEB_REC_UID = '1000000001';
 
+const step = async (label, fn) => { try { return await fn(); } catch (e) { e.message = `[${label}] ${e.message}`; throw e; } };
+
+/** يفحص حالة تسجيل صفحة الويب (query). */
+async function queryWebRecording(state) {
+  const c = cfg();
+  return call(c, `resourceid/${state.resourceId}/sid/${state.sid}/mode/web/query`, null, 1, 'GET');
+}
+
 /** يبدأ تسجيل صفحة الويب. pageUrl = رابط recorder.html بكل بارامتراته. prefix = مسار الحفظ داخل R2. */
 async function startWebRecording({ cname, pageUrl, prefix, maxHours = 4 }) {
   const c = cfg();
   const miss = missing(c);
   if (miss.length) throw new Error(`إعدادات التسجيل ناقصة في Vercel: ${miss.join(', ')}`);
-  const acq = await call(c, 'acquire', { cname, uid: WEB_REC_UID, clientRequest: { resourceExpiredHour: 24, scene: 1 } });
+  const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
+  const recToken = RtcTokenBuilder.buildTokenWithUid(c.appId, c.cert, cname, Number(WEB_REC_UID), RtcRole.SUBSCRIBER, Math.floor(Date.now() / 1000) + 8 * 3600);
+  const acq = await step('acquire', () => call(c, 'acquire', { cname, uid: WEB_REC_UID, clientRequest: { resourceExpiredHour: 24, scene: 1 } }));
   const resourceId = acq.resourceId;
-  const start = await call(c, `resourceid/${resourceId}/mode/web/start`, {
+  const start = await step('start', () => call(c, `resourceid/${resourceId}/mode/web/start`, {
     cname,
     uid: WEB_REC_UID,
     clientRequest: {
+      token: recToken,
       extensionServiceConfig: {
         errorHandlePolicy: 'error_abort',
         extensionServices: [{
@@ -188,18 +218,34 @@ async function startWebRecording({ cname, pageUrl, prefix, maxHours = 4 }) {
         extensionParams: { endpoint: `${c.r2Account}.r2.cloudflarestorage.com` },
       },
     },
-  });
-  return { mode: 'agora-web', resourceId, sid: start.sid, uid: WEB_REC_UID, cname, startedAtMs: Date.now() };
+  }));
+  const state = { mode: 'agora-web', resourceId, sid: start.sid, uid: WEB_REC_UID, cname, startedAtMs: Date.now(), pageUrl: pageUrl.replace(/token=[^&]+/, 'token=***') };
+  // تحقق مبكر: لو تعذّر فتح الصفحة تخرج خدمة Agora فورًا؛ نكتشف ذلك الآن ونعرض السبب الحقيقي بدل الانتظار لنهاية الجلسة
+  await new Promise((r) => setTimeout(r, 7000));
+  try {
+    const q = await queryWebRecording(state);
+    const svc = (q?.serverResponse?.extensionServiceState || [])[0] || {};
+    const st = String(svc?.payload?.state || '');
+    state.lastQuery = JSON.stringify(q?.serverResponse || {}).slice(0, 280);
+    if (st === 'exit' || st === 'failed') throw new Error(`خرجت خدمة التسجيل بعد البدء مباشرة (state=${st}). غالبًا لا تستطيع Agora فتح الصفحة أو أُعيد توجيهها: ${state.pageUrl}. التفاصيل: ${state.lastQuery}`);
+  } catch (e) {
+    if (/خرجت خدمة التسجيل/.test(String(e.message))) { try { await stopWebRecording(state); } catch (_) {} throw e; }
+    // فشل الاستعلام نفسه (مثل 404 «لا يوجد worker»): نعتبره دليلًا على توقف الخدمة
+    if (e.agoraStatus === 404 || e.agoraStatus === 400) { throw new Error(`[query] لم تعد خدمة التسجيل تعمل بعد البدء: ${e.message}`); }
+    // أخطاء أخرى مؤقتة: لا نفشل الجلسة بسببها
+  }
+  return state;
 }
 
-/** يوقف تسجيل الصفحة ويرجّع مسار ملف mp4 (أو null). */
+/** يوقف تسجيل الصفحة ويرجّع مسار ملف mp4 مع تفاصيل الحالة (لعرض السبب الحقيقي عند عدم وجود ملف). */
 async function stopWebRecording(state) {
   const c = cfg();
-  const res = await call(c, `resourceid/${state.resourceId}/sid/${state.sid}/mode/web/stop`, { cname: state.cname, uid: state.uid, clientRequest: {} });
-  const list = res?.serverResponse?.fileList;
+  const res = await step('stop', () => call(c, `resourceid/${state.resourceId}/sid/${state.sid}/mode/web/stop`, { cname: state.cname, uid: state.uid, clientRequest: {} }));
+  const sr = res?.serverResponse || {};
+  const list = sr.fileList;
   const names = Array.isArray(list) ? list.map((f) => String(f?.fileName || '')) : (typeof list === 'string' ? [list] : []);
   const mp4s = names.filter((n) => n.toLowerCase().endsWith('.mp4'));
-  return { mp4: mp4s[0] || null, mp4s, files: names };
+  return { mp4: mp4s[0] || null, mp4s, files: names, uploadingStatus: String(sr.uploadingStatus || ''), raw: JSON.stringify(sr).slice(0, 300) };
 }
 
 module.exports.startWebRecording = startWebRecording;
