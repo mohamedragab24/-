@@ -76,7 +76,11 @@ export default function AdminSessionRecordings() {
                 <TableCell className="font-bold">{r.title || r.requestId}{r.complaint && r.complaintText && <span className="block text-xs font-bold text-red-600 mt-1">شكوى: {r.complaintText}</span>}</TableCell>
                 <TableCell>
                   {r.status === "ready" ? <Badge className="bg-green-100 text-green-700">جاهز</Badge> : r.status === "processing" ? <Badge className="bg-yellow-100 text-yellow-700" title={r.error}>قيد المعالجة</Badge> : <Badge className="bg-red-100 text-red-700" title={r.error}>فشل</Badge>}
-                  {r.status !== "ready" && r.error && <span className="block text-[11px] text-zinc-500 mt-1">{r.error}</span>}
+                  {r.status !== "ready" && r.error && (
+                    <span className="block text-[11px] text-zinc-500 mt-1 break-all">{r.error}
+                      <button type="button" className="mr-2 underline text-primary font-bold" onClick={() => { navigator.clipboard?.writeText(String(r.error)); toast({ title: "تم نسخ الخطأ" }); }}>نسخ الخطأ</button>
+                    </span>
+                  )}
                   {r.complaint && <Badge className="mr-2 bg-orange-100 text-orange-700">شكوى مفتوحة</Badge>}
                 </TableCell>
                 <TableCell>{left(Number(r.adminExpiresAt || 0))}</TableCell>
