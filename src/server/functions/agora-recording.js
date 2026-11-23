@@ -219,7 +219,7 @@ async function startWebRecording({ cname, pageUrl, prefix, maxHours = 4 }) {
       },
     },
   }));
-  const state = { mode: 'agora-web', resourceId, sid: start.sid, uid: WEB_REC_UID, cname, startedAtMs: Date.now(), pageUrl: pageUrl.replace(/token=[^&]+/, 'token=***') };
+  const state = { mode: 'agora-web', resourceId, sid: start.sid, uid: WEB_REC_UID, cname, prefix, startedAtMs: Date.now(), pageUrl: pageUrl.replace(/token=[^&]+/, 'token=***') };
   // تحقق مبكر: لو تعذّر فتح الصفحة تخرج خدمة Agora فورًا؛ نكتشف ذلك الآن ونعرض السبب الحقيقي بدل الانتظار لنهاية الجلسة
   await new Promise((r) => setTimeout(r, 7000));
   try {
@@ -237,15 +237,29 @@ async function startWebRecording({ cname, pageUrl, prefix, maxHours = 4 }) {
   return state;
 }
 
-/** يوقف تسجيل الصفحة ويرجّع مسار ملف mp4 مع تفاصيل الحالة (لعرض السبب الحقيقي عند عدم وجود ملف). */
+/** يوقف تسجيل الصفحة ويرجّع مسار ملف mp4 داخل R2 مع تفاصيل الحالة. */
 async function stopWebRecording(state) {
   const c = cfg();
   const res = await step('stop', () => call(c, `resourceid/${state.resourceId}/sid/${state.sid}/mode/web/stop`, { cname: state.cname, uid: state.uid, clientRequest: {} }));
   const sr = res?.serverResponse || {};
-  const list = sr.fileList;
-  const names = Array.isArray(list) ? list.map((f) => String(f?.fileName || '')) : (typeof list === 'string' ? [list] : []);
+  // في وضع الويب قائمة الملفات داخل extensionServiceState[].payload.fileList والمفتاح filename (وليس serverResponse.fileList/fileName)
+  const svcs = Array.isArray(sr.extensionServiceState) ? sr.extensionServiceState : [];
+  const svc = svcs.find((x) => x?.serviceName === 'web_recorder_service') || svcs[0] || {};
+  const payload = svc.payload || {};
+  const list = payload.fileList || sr.fileList;
+  const items = Array.isArray(list) ? list : (typeof list === 'string' ? [{ filename: list }] : []);
+  const prefixPath = Array.isArray(state.prefix) ? state.prefix.join('/') : '';
+  const names = items.map((f) => {
+    const n = String(f?.filename || f?.fileName || '');
+    if (!n) return '';
+    return n.includes('/') || !prefixPath ? n : `${prefixPath}/${n}`; // اسم الملف نسبي لـ fileNamePrefix
+  }).filter(Boolean);
   const mp4s = names.filter((n) => n.toLowerCase().endsWith('.mp4'));
-  return { mp4: mp4s[0] || null, mp4s, files: names, uploadingStatus: String(sr.uploadingStatus || ''), raw: JSON.stringify(sr).slice(0, 300) };
+  return {
+    mp4: mp4s[0] || null, mp4s, files: names,
+    uploadingStatus: String(payload.uploadingStatus || sr.uploadingStatus || ''),
+    raw: JSON.stringify(sr).slice(0, 300),
+  };
 }
 
 module.exports.startWebRecording = startWebRecording;
