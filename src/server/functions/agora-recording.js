@@ -264,3 +264,13 @@ async function stopWebRecording(state) {
 
 module.exports.startWebRecording = startWebRecording;
 module.exports.stopWebRecording = stopWebRecording;
+
+// معرّفات وقنوات يستخدمها بوت التسجيل (bot-recording.js)
+module.exports.WEB_UID = Number(WEB_REC_UID);
+module.exports.groupChannel = (groupId, sessionId) => `Group_${groupId}_${sessionId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+module.exports.istifhamChannel = (requestId) => `Fahimni_${requestId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+module.exports.pageRtcToken = (channel) => {
+  const c = cfg();
+  const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
+  return RtcTokenBuilder.buildTokenWithUid(c.appId, c.cert, channel, Number(WEB_REC_UID), RtcRole.SUBSCRIBER, Math.floor(Date.now() / 1000) + 8 * 3600);
+};

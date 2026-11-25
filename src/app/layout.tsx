@@ -47,6 +47,8 @@ export default function RootLayout({
   return (
     <html lang="ar" dir="rtl" suppressHydrationWarning>
       <head>
+        {/* منع متصفحات أندرويد/WebView من قلب الألوان تلقائياً (إصلاح الشاشة السوداء داخل التطبيق) */}
+        <meta name="color-scheme" content="only light" />
         <link rel="manifest" href="/manifest.json" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

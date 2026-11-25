@@ -107,11 +107,11 @@ async function loadParticipantRequest(uid, requestId) {
   return { ref, r, adm };
 }
 
-/** يبدأ تسجيل الجلسة تلقائيًا (آمن للاستدعاء أكثر من مرة). */
-exports.startIstifhamRecording = onCall(async (request) => {
-  const uid = reqUid(request);
-  const requestId = String(request.data?.requestId || '').trim();
-  const { ref, r } = await loadParticipantRequest(uid, requestId);
+/** يضمن بدء تسجيل الجلسة (آمن للتكرار): يُستدعى من التطبيق (startIstifhamRecording) ومن السيرفر تلقائيًا عند دخول الطرفين (getAgoraMeetingToken). */
+async function ensureIstifhamRecording(requestId) {
+  const ref = db.collection('istifhams').doc(requestId);
+  const r = (await ref.get()).data();
+  if (!r) throw new HttpsError('not-found', 'المحاضرة غير موجودة');
   // التسجيل عبر «بوت فهمت»: ينضم للقناة كمشاهد خفي ويسجّل الجلسة كاملة ثم يرفعها إلى R2 (بدون أي إجراء من المُفهم أو المستفهم)
   if (r.recordingOpen || r.recordingStopped || r.recordingJob) return { ok: true, already: true };
   const lock = await db.runTransaction(async (tx) => {
@@ -133,6 +133,15 @@ exports.startIstifhamRecording = onCall(async (request) => {
     await out.set({ requestId, mustafhemId: r.mustafhemId, mufhemId: r.mufhemId, title: String(r.title || ''), status: 'failed', error: msg, adminExpiresAt: Date.now() + 2 * 24 * 3600 * 1000, createdAt: FV.serverTimestamp() }, { merge: true });
     return { ok: false, error: msg };
   }
+}
+exports._ensureIstifhamRecording = ensureIstifhamRecording;
+
+/** يبدأ تسجيل الجلسة تلقائيًا (آمن للاستدعاء أكثر من مرة). */
+exports.startIstifhamRecording = onCall(async (request) => {
+  const uid = reqUid(request);
+  const requestId = String(request.data?.requestId || '').trim();
+  await loadParticipantRequest(uid, requestId);
+  return ensureIstifhamRecording(requestId);
 });
 
 /** المشاركون يختارون حفظ التسجيل عند المستفهم. data: { requestId, days: 0|1|10|15|30 } (0 = لا أريد الحفظ) */

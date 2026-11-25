@@ -12,11 +12,13 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Search, UserMinus, UserCheck, Eye, Mail, Phone, Calendar, Clock, Fingerprint, ShieldCheck, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAdminActor, logAdminActivity } from "@/lib/admin-activity";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 
 export default function AdminMustafhems() {
   const firestore = useFirestore();
+  const actor = useAdminActor();
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedUser, setSelectedUser] = useState<any>(null);
@@ -45,11 +47,11 @@ export default function AdminMustafhems() {
         verificationStatus: newStatus ? 'verified' : 'none'
       });
       
-      await addDoc(collection(firestore, "adminLogs"), {
+      await logAdminActivity(firestore, actor, {
         action: newStatus ? 'verify_user' : 'unverify_user',
         targetUserId: user.id,
-        details: `توثيق يدوي من قائمة المستفهمين`,
-        timestamp: new Date().toISOString()
+        targetUserName: (user as any).fullName,
+        details: `توثيق يدوي من قائمة المستفهمين`
       });
 
       setSelectedUser({ ...user, isVerified: newStatus });

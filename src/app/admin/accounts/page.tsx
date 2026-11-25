@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Search, Mail, Phone, Fingerprint, ShieldCheck, Loader2, Key, UserCheck, UserX, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAdminActor, logAdminActivity } from "@/lib/admin-activity";
 import { getApp } from "firebase/app";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
  */
 export default function AdminAccountManagement() {
   const firestore = useFirestore();
+  const actor = useAdminActor();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -94,11 +96,11 @@ export default function AdminAccountManagement() {
         verificationStatus: newStatus ? 'verified' : 'none'
       });
 
-      await addDoc(collection(firestore, "adminLogs"), {
+      await logAdminActivity(firestore, actor, {
         action: newStatus ? 'verify_user' : 'unverify_user',
         targetUserId: targetUser.id,
-        details: `تم ${newStatus ? 'منح' : 'سحب'} شارة التوثيق يدوياً من مركز البحث`,
-        timestamp: new Date().toISOString()
+        targetUserName: targetUser.fullName,
+        details: `تم ${newStatus ? 'منح' : 'سحب'} شارة التوثيق يدوياً من مركز البحث`
       });
 
       setTargetUser({ ...targetUser, isVerified: newStatus });

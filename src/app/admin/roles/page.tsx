@@ -10,6 +10,9 @@ import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ShieldAlert, ShieldCheck, Search, UserPlus, UserMinus, Shield, Users, Trash2, Phone, Fingerprint, Mail, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getApp } from "firebase/app";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
+import { useAdminActor, logAdminActivity } from "@/lib/admin-activity";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +24,40 @@ export default function AdminRoles() {
   const [targetUser, setTargetUser] = useState<any>(null);
   const [permissions, setPermissions] = useState<string[]>(["support"]);
   const [isSearching, setIsSearching] = useState(false);
+  const actor = useAdminActor();
+
+  // إنشاء حساب أدمن جديد من لوحة التحكم
+  const [newAdminName, setNewAdminName] = useState("");
+  const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [newAdminPerms, setNewAdminPerms] = useState<string[]>(["support"]);
+  const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
+
+  const handleCreateAdmin = async () => {
+    if (!newAdminName.trim() || !newAdminEmail.trim()) {
+      toast({ variant: "destructive", title: "بيانات ناقصة", description: "أدخل اسم المسؤول وبريده الإلكتروني." });
+      return;
+    }
+    if (newAdminPassword.length < 6) {
+      toast({ variant: "destructive", title: "كلمة المرور ضعيفة", description: "كلمة المرور يجب ألا تقل عن 6 أحرف." });
+      return;
+    }
+    setIsCreatingAdmin(true);
+    try {
+      await httpsCallable(getFunctions(getApp(), 'us-central1'), 'createAdminAccount')({
+        fullName: newAdminName.trim(),
+        email: newAdminEmail.trim(),
+        password: newAdminPassword,
+        permissions: newAdminPerms
+      });
+      toast({ title: "تم إنشاء حساب الأدمن", description: `يمكن لـ ${newAdminName.trim()} الدخول الآن ببريده وكلمة المرور.` });
+      setNewAdminName(""); setNewAdminEmail(""); setNewAdminPassword(""); setNewAdminPerms(["support"]);
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "تعذر إنشاء الحساب", description: e?.message || "خطأ غير معروف" });
+    } finally {
+      setIsCreatingAdmin(false);
+    }
+  };
 
   // جلب قائمة المسؤولين الحاليين
   const adminsQuery = useMemoFirebase(() => {
@@ -101,12 +138,11 @@ export default function AdminRoles() {
         adminPermissions: isNowAdmin ? permissions : []
       });
 
-      await addDoc(collection(firestore, "adminLogs"), {
+      await logAdminActivity(firestore, actor, {
         action: isNowAdmin ? 'grant_admin' : 'revoke_admin',
         targetUserId: target.id,
         targetUserName: target.fullName,
-        details: isNowAdmin ? `تم منح صلاحيات: ${permissions.join(', ')}` : 'تم سحب كافة الصلاحيات الإدارية',
-        timestamp: new Date().toISOString()
+        details: isNowAdmin ? `تم منح صلاحيات: ${permissions.join(', ')}` : 'تم سحب كافة الصلاحيات الإدارية'
       });
 
       toast({ 
@@ -276,6 +312,52 @@ export default function AdminRoles() {
           </div>
         </Card>
       </div>
+
+      {/* إنشاء حساب أدمن جديد كلياً */}
+      <Card className="shadow-2xl rounded-[3rem] border-2 overflow-hidden bg-white">
+        <CardHeader className="bg-emerald-600 text-white p-8 text-right">
+          <CardTitle className="text-2xl font-black flex items-center gap-4 justify-end">
+            <UserPlus className="h-8 w-8" /> إنشاء حساب أدمن جديد
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-8 space-y-6">
+          <p className="text-sm font-bold text-muted-foreground">ينشئ حساب دخول جديد بصلاحيات إدارية مباشرة، دون الحاجة لتسجيله من صفحة المنصة أولاً.</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label className="font-bold">اسم المسؤول</Label>
+              <Input placeholder="الاسم بالكامل" className="h-14 rounded-2xl border-2" value={newAdminName} onChange={(e) => setNewAdminName(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label className="font-bold">البريد الإلكتروني</Label>
+              <Input type="email" placeholder="admin@example.com" className="h-14 rounded-2xl border-2" dir="ltr" value={newAdminEmail} onChange={(e) => setNewAdminEmail(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label className="font-bold">كلمة المرور</Label>
+              <Input type="password" placeholder="6 أحرف على الأقل" className="h-14 rounded-2xl border-2" dir="ltr" value={newAdminPassword} onChange={(e) => setNewAdminPassword(e.target.value)} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { id: 'finance', label: 'المالية' },
+              { id: 'support', label: 'الدعم الفني' },
+              { id: 'moderator', label: 'الرقابة' },
+              { id: 'superadmin', label: 'سوبر أدمن' }
+            ].map((p) => (
+              <div key={p.id} className="flex items-center gap-2 p-3 rounded-xl border hover:bg-zinc-50 justify-end">
+                <Label htmlFor={`new-${p.id}`} className="cursor-pointer font-bold">{p.label}</Label>
+                <Checkbox
+                  id={`new-${p.id}`}
+                  checked={newAdminPerms.includes(p.id)}
+                  onCheckedChange={() => setNewAdminPerms(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id])}
+                />
+              </div>
+            ))}
+          </div>
+          <Button onClick={handleCreateAdmin} disabled={isCreatingAdmin} className="w-full h-14 text-xl font-black rounded-2xl bg-emerald-600 hover:bg-emerald-700 shadow-lg">
+            {isCreatingAdmin ? <Loader2 className="animate-spin" /> : <><UserPlus className="ml-2 h-6 w-6" /> إنشاء حساب الأدمن</>}
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

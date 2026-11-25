@@ -27,7 +27,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       items: [
         { label: "الإحصائيات", href: "/admin", icon: LayoutDashboard },
         { label: "فحص النظام والأخطاء", href: "/admin/system-check", icon: Activity },
-        { label: "سجل الرقابة", href: "/admin/logs", icon: History },
+        { label: "إشعارات الأدمن", href: "/admin/logs", icon: Bell },
         { label: "المزامنة vNext", href: "/admin/deployment", icon: CloudUpload },
         { label: "الذكاء الاصطناعي", href: "/admin/ai", icon: Bot },
       ]
@@ -55,6 +55,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { label: "الطلبات المكتملة", href: "/admin/completed-orders", icon: CheckCircle2 },
         { label: "مراجعة المحاضرات", href: "/admin/sessions", icon: Video },
         { label: "تسجيلات الجلسات (شكاوى)", href: "/admin/session-recordings", icon: Video },
+        { label: "تسجيلات المحاضرات والميتنجات", href: "/admin/lecture-recordings", icon: Video },
         { label: "طلبات تغيير الجهاز", href: "/admin/device-requests", icon: Video },
         { label: "طلبات الاسترداد", href: "/admin/refunds", icon: Video },
         { label: "المجموعات والفواتير", href: "/admin/groups", icon: Users },
