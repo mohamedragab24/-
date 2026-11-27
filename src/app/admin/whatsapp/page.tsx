@@ -144,17 +144,28 @@ export default function AdminWhatsApp() {
   const { data: settings } = useDoc(settingsRef);
 
   const [texts, setTexts] = useState<Record<string, string>>(DEFAULT_TEXTS);
-  const [faqs, setFaqs] = useState<{ id: string; question: string; answer: string }[]>([]);
+  const [faqs, setFaqs] = useState<{ id: string; question: string; answers: string[] }[]>([]);
   const [keywords, setKeywords] = useState("");
   const [botOn, setBotOn] = useState(true);
+  const [requireOtpOnSignup, setRequireOtpOnSignup] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
     if (!settings) return;
     setTexts({ ...DEFAULT_TEXTS, ...((settings as any).texts || {}) });
-    setFaqs(Array.isArray((settings as any).faqs) ? (settings as any).faqs : []);
+    const rawFaqs = Array.isArray((settings as any).faqs) ? (settings as any).faqs : [];
+    setFaqs(
+      rawFaqs.map((f: any, idx: number) => ({
+        id: String(f?.id || `faq_${idx}_${Date.now()}`),
+        question: String(f?.question || ""),
+        answers: Array.isArray(f?.answers) && f.answers.length
+          ? f.answers.map((a: any) => String(a))
+          : f?.answer ? [String(f.answer)] : [""],
+      }))
+    );
     setKeywords(Array.isArray((settings as any).handoffKeywords) ? (settings as any).handoffKeywords.join(", ") : "");
     setBotOn((settings as any).enabled !== false);
+    setRequireOtpOnSignup((settings as any).requireOtpOnSignup === true);
   }, [settings]);
 
   useEffect(() => {
@@ -230,8 +241,15 @@ export default function AdminWhatsApp() {
         doc(firestore, "settings", "whatsappBot"),
         {
           enabled: botOn,
+          requireOtpOnSignup,
           texts,
-          faqs,
+          faqs: faqs
+            .filter((f) => f.question.trim())
+            .map((f) => ({
+              id: f.id,
+              question: f.question.trim(),
+              answers: (f.answers || []).map((a) => a.trim()).filter(Boolean),
+            })),
           handoffKeywords: keywords.split(",").map((s) => s.trim()).filter(Boolean),
           updatedAt: new Date().toISOString(),
           updatedBy: user?.uid || null,
@@ -335,6 +353,9 @@ export default function AdminWhatsApp() {
                     <div className="flex items-center justify-between gap-2 mt-1">
                       <span className="text-xs text-muted-foreground truncate">{c.lastMessage || "—"}</span>
                       <div className="flex items-center gap-1 shrink-0">
+                        {c.channel === "web" && (
+                          <Badge variant="outline" className="text-[9px] h-4 border-emerald-300 text-emerald-700">واتساب غير رسمي</Badge>
+                        )}
                         {c.status === "human" && <Badge className="bg-orange-500 text-[9px] h-4">موظف</Badge>}
                         {Number(c.unread || 0) > 0 && <Badge className="bg-red-500 text-[9px] h-4">{c.unread}</Badge>}
                       </div>
@@ -434,6 +455,16 @@ export default function AdminWhatsApp() {
           </Card>
 
           <Card className="rounded-2xl">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-lg font-black">تأكيد الموبايل بكود واتساب عند التسجيل</CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">لما يتفعّل، صفحة التسجيل مش هتسمح بإكمال الحساب غير بعد ما الرقم يتأكد بكود واتساب.</p>
+              </div>
+              <Switch checked={requireOtpOnSignup} onCheckedChange={setRequireOtpOnSignup} />
+            </CardHeader>
+          </Card>
+
+          <Card className="rounded-2xl">
             <CardHeader><CardTitle className="text-lg font-black">نصوص الردود</CardTitle></CardHeader>
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {Object.keys(TEXT_LABELS).map((key) => (
@@ -451,36 +482,85 @@ export default function AdminWhatsApp() {
           </Card>
 
           <Card className="rounded-2xl">
-            <CardHeader><CardTitle className="text-lg font-black">أسئلة إضافية</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle className="text-lg font-black">أسئلة وأجوبة البوت</CardTitle>
+              <p className="text-xs text-muted-foreground">كل سؤال تقدر تحطله أكتر من رد، والبوت يختار واحد منهم عشوائي كل مرة عشان الكلام ميبقاش مكرر.</p>
+            </CardHeader>
             <CardContent className="space-y-3">
               {faqs.map((f, i) => (
-                <div key={i} className="grid grid-cols-1 md:grid-cols-[240px_1fr_40px] gap-2 items-start border rounded-xl p-3">
-                  <Input
-                    value={f.question}
-                    onChange={(e) => setFaqs((list) => list.map((x, idx) => (idx === i ? { ...x, question: e.target.value } : x)))}
-                    placeholder="السؤال (كلمات البحث)"
-                    className="rounded-lg"
-                  />
-                  <Textarea
-                    value={f.answer}
-                    onChange={(e) => setFaqs((list) => list.map((x, idx) => (idx === i ? { ...x, answer: e.target.value } : x)))}
-                    placeholder="الرد"
-                    className="rounded-lg min-h-[60px]"
-                  />
-                  <Button variant="ghost" size="icon" onClick={() => setFaqs((list) => list.filter((_, idx) => idx !== i))}>
-                    <Trash2 size={16} className="text-red-500" />
-                  </Button>
+                <div key={f.id} className="border-2 rounded-2xl p-3 space-y-2 bg-white">
+                  <div className="flex gap-2 items-center">
+                    <Input
+                      value={f.question}
+                      onChange={(e) => setFaqs((list) => list.map((x, idx) => (idx === i ? { ...x, question: e.target.value } : x)))}
+                      placeholder="السؤال أو كلمات البحث (مثال: بكام الكورس)"
+                      className="rounded-lg font-bold"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="حذف السؤال"
+                      onClick={() => setFaqs((list) => list.filter((_, idx) => idx !== i))}
+                    >
+                      <Trash2 size={16} className="text-red-500" />
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {(f.answers || []).map((answer, ai) => (
+                      <div key={ai} className="flex gap-2 items-start">
+                        <span className="text-[10px] font-black text-muted-foreground mt-4 w-10 shrink-0">رد {ai + 1}</span>
+                        <Textarea
+                          value={answer}
+                          onChange={(e) =>
+                            setFaqs((list) =>
+                              list.map((x, idx) =>
+                                idx === i ? { ...x, answers: x.answers.map((a, j) => (j === ai ? e.target.value : a)) } : x
+                              )
+                            )
+                          }
+                          placeholder="نص الرد"
+                          className="rounded-lg min-h-[60px] text-sm"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="حذف الرد"
+                          disabled={(f.answers || []).length <= 1}
+                          onClick={() =>
+                            setFaqs((list) =>
+                              list.map((x, idx) => (idx === i ? { ...x, answers: x.answers.filter((_, j) => j !== ai) } : x))
+                            )
+                          }
+                        >
+                          <Trash2 size={14} className="text-zinc-400" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg gap-1"
+                      onClick={() =>
+                        setFaqs((list) => list.map((x, idx) => (idx === i ? { ...x, answers: [...(x.answers || []), ""] } : x)))
+                      }
+                    >
+                      <Plus size={14} /> إضافة رد آخر
+                    </Button>
+                  </div>
                 </div>
               ))}
+
               <Button
                 variant="outline"
                 className="rounded-xl gap-2"
-                onClick={() => setFaqs((l) => [...l, { id: `faq_${Date.now()}`, question: "", answer: "" }])}
+                onClick={() => setFaqs((l) => [...l, { id: `faq_${Date.now()}`, question: "", answers: [""] }])}
               >
-                <Plus size={16} /> إضافة سؤال
+                <Plus size={16} /> إضافة سؤال جديد
               </Button>
               <p className="text-xs text-muted-foreground">
-                الأسئلة دي بتشتغل بالكلمات المفتاحية: لو رسالة العميل فيها كلمة من السؤال، البوت يرد بالجواب.
+                المطابقة بالكلمات المفتاحية: لو رسالة العميل فيها كلمة من السؤال (٣ حروف أو أكتر) البوت يرد بأحد الردود.
+                لو مفيش تطابق بيرد بالردود الجاهزة (الكورسات، الحجز، الدفع...).
               </p>
             </CardContent>
           </Card>
