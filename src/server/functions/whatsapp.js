@@ -124,6 +124,25 @@ async function markRead(messageId) {
   }
 }
 
+/** طبقة النقل: إما إرسال حقيقي عبر Cloud API، أو تجميع الردود لمسار الواتساب غير الرسمي (bridge) */
+const cloudIO = {
+  text: (to, body) => sendText(to, body),
+  list: (to, payload) => sendList(to, payload),
+  buttons: (to, payload) => sendButtons(to, payload),
+  markRead: (id) => markRead(id),
+};
+
+function collectorIO() {
+  const out = [];
+  return {
+    out,
+    async text(to, body) { out.push({ type: 'text', body }); },
+    async list(to, payload) { out.push({ type: 'list', ...payload }); },
+    async buttons(to, payload) { out.push({ type: 'buttons', ...payload }); },
+    async markRead() {},
+  };
+}
+
 /** أرقام واتساب تأتي بصيغة دولية بدون + مثل 201012345678 */
 function normalizePhone(value) {
   const digits = String(value || '').replace(/[^\d]/g, '');
@@ -187,7 +206,9 @@ async function loadBotSettings() {
     return {
       enabled: data.enabled !== false,
       texts: { ...DEFAULT_TEXT, ...Object.fromEntries(Object.entries(data.texts || {}).filter(([, v]) => typeof v === 'string' && v.trim())) },
-      extraFaqs: Array.isArray(data.faqs) ? data.faqs.filter((f) => f && f.question && f.answer) : [],
+      extraFaqs: Array.isArray(data.faqs)
+        ? data.faqs.filter((f) => f && f.question && (faqAnswers(f).length > 0))
+        : [],
       handoffKeywords: Array.isArray(data.handoffKeywords) && data.handoffKeywords.length ? data.handoffKeywords : [],
       businessHours: data.businessHours || '٩ صباحاً - ١٠ مساءً',
     };
@@ -271,22 +292,59 @@ function menuPayload(texts, name) {
   };
 }
 
+/** ردود السؤال: answers[] الجديدة أو answer القديم */
+function faqAnswers(faq) {
+  if (!faq) return [];
+  const list = Array.isArray(faq.answers) ? faq.answers : faq.answer ? [faq.answer] : [];
+  return list.map((a) => String(a || '').trim()).filter(Boolean);
+}
+
+const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+/**
+ * يختار أقرب سؤال أضافه الأدمن بالكلمات المفتاحية.
+ * الكلمات أقل من 3 حروف يتم تجاهلها (في، من، على...) عشان المطابقة متبقاش عشوائية.
+ */
+function matchFaq(text, faqs) {
+  const t = ` ${String(text || '').toLowerCase()} `;
+  let best = null;
+  let bestScore = 0;
+  for (const faq of faqs || []) {
+    const answers = faqAnswers(faq);
+    if (!answers.length) continue;
+    const q = String(faq.question || '').toLowerCase().trim();
+    if (!q) continue;
+    const words = q.split(/[\s,،\/\|]+/).map((w) => w.trim()).filter((w) => w.length >= 3);
+    let score = 0;
+    if (t.includes(q)) score += 5;
+    for (const w of words) if (t.includes(w)) score += 1;
+    if (score > bestScore) {
+      bestScore = score;
+      best = { faq, answers };
+    }
+  }
+  return bestScore >= 1 ? best : null;
+}
+
 async function replyFor({ intent, texts, extraFaqs }) {
   if (!intent) return { kind: 'text', body: texts.fallback };
   const faq = extraFaqs.find((f) => String(f.id || '') === intent);
-  if (faq) return { kind: 'text', body: faq.answer };
+  if (faq) {
+    const answers = faqAnswers(faq);
+    if (answers.length) return { kind: 'text', body: pickOne(answers) };
+  }
   return { kind: 'text', body: texts[intent] || texts.fallback };
 }
 
 /** يبني ويرسل رد البوت. يرجّع { intent, handoff } */
-async function runBot({ waId, text, name, settings, conversation }) {
+async function runBot({ waId, text, name, settings, conversation, io = cloudIO }) {
   const texts = settings.texts;
   const lower = String(text || '').toLowerCase();
   const extraHandoff = settings.handoffKeywords.some((k) => k && lower.includes(String(k).toLowerCase()));
   const intent = extraHandoff ? 'human' : detectIntent(text);
 
   if (intent === 'human') {
-    await sendText(waId, texts.handoff);
+    await io.text(waId, texts.handoff);
     await upsertConversation(waId, {
       status: 'human',
       botEnabled: false,
@@ -304,8 +362,22 @@ async function runBot({ waId, text, name, settings, conversation }) {
     return { intent: 'human', handoff: true };
   }
 
+  // أسئلة الأدمن لها الأولوية على الردود الجاهزة
+  const faqMatch = matchFaq(text, settings.extraFaqs);
+  if (faqMatch) {
+    const body = pickOne(faqMatch.answers);
+    await io.text(waId, body);
+    await upsertConversation(waId, {
+      lastOutboundAt: now(), lastMessage: body, lastMessageAt: now(), lastIntent: 'faq', unread: 0,
+    });
+    await logMessage(waId, `out_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`, {
+      direction: 'out', type: 'text', text: body, by: 'bot', status: 'sent', intent: 'faq', faqId: faqMatch.faq.id || null,
+    });
+    return { intent: 'faq', faqId: faqMatch.faq.id || null, handoff: false };
+  }
+
   const reply = await replyFor({ intent, texts, extraFaqs: settings.extraFaqs });
-  await sendText(waId, reply.body);
+  await io.text(waId, reply.body);
   await upsertConversation(waId, {
     lastOutboundAt: now(),
     lastMessage: reply.body,
@@ -320,15 +392,15 @@ async function runBot({ waId, text, name, settings, conversation }) {
 }
 
 /** الرد على اختيار من القائمة */
-async function runMenuChoice({ waId, choiceId, settings, conversation, name }) {
-  if (choiceId === 'human') return runBot({ waId, text: 'موظف', name, settings, conversation });
+async function runMenuChoice({ waId, choiceId, settings, conversation, name, io = cloudIO }) {
+  if (choiceId === 'human') return runBot({ waId, text: 'موظف', name, settings, conversation, io });
   if (choiceId === 'menu') {
-    await sendList(waId, menuPayload(settings.texts, name));
+    await io.list(waId, menuPayload(settings.texts, name));
     await upsertConversation(waId, { lastOutboundAt: now(), lastMessage: 'القائمة الرئيسية', lastMessageAt: now() });
     return { intent: 'menu' };
   }
   const reply = await replyFor({ intent: choiceId, texts: settings.texts, extraFaqs: settings.extraFaqs });
-  await sendText(waId, reply.body);
+  await io.text(waId, reply.body);
   await upsertConversation(waId, {
     lastOutboundAt: now(), lastMessage: reply.body, lastMessageAt: now(), lastIntent: choiceId, unread: 0,
   });
@@ -354,8 +426,38 @@ function extractInbound(m) {
   return { kind: 'other', text: label };
 }
 
+
+/**
+ * رسالة واردة من خدمة الربط (whatsapp-web.js) — نفس منطق البوت لكن بدون Cloud API:
+ * يرجّع الردود في المصفوفة replies عشان الخدمة تبعتهم من جلستها.
+ */
+async function handleBridgeMessage({ from, name, text, messageId, type, choiceId }) {
+  const waId = normalizePhone(from);
+  if (!waId) return { ok: false, error: 'no_sender', replies: [] };
+
+  const id = String(messageId || `web_${waId}_${Date.now()}`);
+  let m;
+  if (choiceId) {
+    m = { from: waId, id, type: 'interactive', interactive: { list_reply: { id: String(choiceId), title: String(text || '') } } };
+  } else if (type && type !== 'text') {
+    m = { from: waId, id, type: String(type) };
+  } else {
+    m = { from: waId, id, type: 'text', text: { body: String(text || '') } };
+  }
+
+  const io = collectorIO();
+  const result = await handleMessage({
+    m,
+    contactName: name || '',
+    metadata: { phone_number_id: 'bridge', display_phone_number: '' },
+    io,
+    channel: 'web',
+  });
+  return { ok: true, ...result, replies: io.out };
+}
+
 /** المعالجة الكاملة لرسالة واحدة واردة */
-async function handleMessage({ m, contactName, metadata }) {
+async function handleMessage({ m, contactName, metadata, io = cloudIO, channel = 'cloud' }) {
   const waId = normalizePhone(m.from);
   if (!waId) return { skipped: 'no_sender' };
 
@@ -388,11 +490,12 @@ async function handleMessage({ m, contactName, metadata }) {
     lastMessage: inbound.text || '',
     lastMessageAt: now(),
     ...(conversation ? {} : { createdAt: now(), status: 'bot', botEnabled: true, handoff: false }),
+    channel,
     // عدّاد غير المقروء للأدمن: بيزيد بس في المحادثات اللي محتاجة تدخل بشري
     unread: humanMode ? admin.firestore.FieldValue.increment(1) : 0,
   });
 
-  await markRead(String(m.id));
+  await io.markRead(String(m.id));
 
   // المحادثة محوّلة لموظف أو البوت مقفول: نسجل الرسالة فقط والأدمن يرد
   if (humanMode) {
@@ -403,7 +506,7 @@ async function handleMessage({ m, contactName, metadata }) {
   if (!settings.enabled || !config().botEnabled) return { stored: true, botOff: true };
 
   if (inbound.kind === 'other') {
-    await sendText(waId, settings.texts.nonText);
+    await io.text(waId, settings.texts.nonText);
     await upsertConversation(waId, { lastOutboundAt: now(), lastMessage: settings.texts.nonText, lastMessageAt: now() });
     return { stored: true, intent: 'nonText' };
   }
@@ -412,16 +515,16 @@ async function handleMessage({ m, contactName, metadata }) {
   const isFirst = !conversation;
   if (isFirst && inbound.kind === 'text' && !detectIntent(inbound.text)) {
     const name = platformUser?.name || contactName || '';
-    await sendList(waId, menuPayload(settings.texts, name));
+    await io.list(waId, menuPayload(settings.texts, name));
     await upsertConversation(waId, { lastOutboundAt: now(), lastMessage: 'القائمة الرئيسية', lastMessageAt: now() });
     return { stored: true, intent: 'menu' };
   }
 
   if (inbound.kind === 'choice' && inbound.choiceId) {
-    return { stored: true, ...(await runMenuChoice({ waId, choiceId: inbound.choiceId, settings, conversation, name: platformUser?.name || contactName })) };
+    return { stored: true, ...(await runMenuChoice({ waId, choiceId: inbound.choiceId, settings, conversation, name: platformUser?.name || contactName, io })) };
   }
 
-  return { stored: true, ...(await runBot({ waId, text: inbound.text, name: platformUser?.name || contactName, settings, conversation })) };
+  return { stored: true, ...(await runBot({ waId, text: inbound.text, name: platformUser?.name || contactName, settings, conversation, io })) };
 }
 
 /** معالجة حالة تسليم/قراءة رسالة صادرة */
@@ -479,6 +582,32 @@ async function sendAdminReply({ waId, text, actor }) {
     e.code = 'not-found';
     throw e;
   }
+  const body = String(text).slice(0, 4096);
+
+  // محادثات الواتساب غير الرسمي (bridge): الإرسال من الخدمة نفسها عبر outbox
+  if (conversation.channel === 'web') {
+    const outRef = db().collection('whatsappOutbox').doc();
+    await outRef.set({
+      waId: phone,
+      text: body,
+      by: actor?.fullName || actor?.email || actor?.uid || '',
+      actorUid: actor?.uid || null,
+      status: 'pending',
+      channel: 'web',
+      createdAt: now(),
+    });
+    await logMessage(phone, `out_${outRef.id}`, {
+      direction: 'out', type: 'text', text: body, by: 'human',
+      actorUid: actor?.uid || null, actorName: actor?.fullName || actor?.email || '', status: 'queued',
+    });
+    await upsertConversation(phone, {
+      status: 'human', botEnabled: false, handoff: true,
+      lastOutboundAt: now(), lastMessage: body, lastMessageAt: now(), unread: 0,
+      lastHumanReplyBy: actor?.fullName || actor?.email || actor?.uid || '',
+    });
+    return { ok: true, queued: true, outboxId: outRef.id };
+  }
+
   const lastInbound = conversation.lastInboundAt?.toDate ? conversation.lastInboundAt.toDate().getTime() : 0;
   if (lastInbound && Date.now() - lastInbound > WINDOW_MS) {
     const e = new Error('window_closed');
@@ -486,7 +615,6 @@ async function sendAdminReply({ waId, text, actor }) {
     throw e;
   }
 
-  const body = String(text).slice(0, 4096);
   const res = await sendText(phone, body);
   const waMessageId = res?.messages?.[0]?.id || `out_${Date.now()}`;
 
@@ -550,6 +678,7 @@ async function subscribeApp() {
 module.exports = {
   verifySignature,
   handleWebhook,
+  handleBridgeMessage,
   sendAdminReply,
   setupStatus,
   subscribeApp,
@@ -557,6 +686,7 @@ module.exports = {
   sendList,
   config,
   normalizePhone,
+  matchFaq,
   DEFAULT_TEXT,
   MENU_ROWS,
 };
