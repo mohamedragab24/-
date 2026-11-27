@@ -182,7 +182,7 @@ async function start() {
       }, 90000);
     }
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr && !PAIR_PHONE) {
@@ -206,7 +206,14 @@ async function start() {
         const loggedOut = code === DisconnectReason.loggedOut;
         log('connection closed:', code || '؟', loggedOut ? '(اتعمل logout — محتاج ربط جديد)' : '— إعادة اتصال بعد 10 ثواني');
         if (loggedOut) {
-          log('الجلسة اتلغت من الموبايل. امسح مجلد', AUTH_DIR, 'وأعد الربط.');
+          log('الجلسة اتلغت. بمسح الجلسة القديمة (القرص + النسخة الاحتياطية) وبدء ربط جديد.');
+          try {
+            for (const f of fs.existsSync(AUTH_DIR) ? fs.readdirSync(AUTH_DIR) : []) fs.rmSync(path.join(AUTH_DIR, f), { recursive: true, force: true });
+          } catch (e) { log('wipe failed:', e.message); }
+          if (backupTimer) { clearTimeout(backupTimer); backupTimer = null; }
+          if (db && AUTH_BACKUP) { try { await authBackupRef().delete(); } catch (e) { log('backup delete failed:', e.message); } }
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(() => { reconnectTimer = null; start().catch((e) => log('restart failed:', e.message)); }, 5000);
           return;
         }
         if (reconnectTimer) clearTimeout(reconnectTimer);
