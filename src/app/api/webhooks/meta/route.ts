@@ -29,3 +29,4 @@ export async function POST(request: NextRequest) {
 }
 
 // redeploy: second app secret env added
+// redeploy: phone number id updated
