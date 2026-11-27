@@ -44,12 +44,17 @@ function config() {
 /** فحص توقيع ميتا X-Hub-Signature-256 (HMAC-SHA256 للجسم الخام) */
 function verifySignature(rawBody, signatureHeader) {
   const { appSecret, allowUnsigned } = config();
-  if (!appSecret) return allowUnsigned;
+  const secrets = [appSecret, process.env.WHATSAPP_APP_SECRET_2]
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+  if (!secrets.length) return allowUnsigned;
   if (!signatureHeader || !signatureHeader.startsWith('sha256=')) return false;
-  const expected = crypto.createHmac('sha256', appSecret).update(rawBody, 'utf8').digest('hex');
   const got = signatureHeader.slice(7);
-  if (expected.length !== got.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(got));
+  return secrets.some((secret) => {
+    const expected = crypto.createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex');
+    if (expected.length !== got.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(got));
+  });
 }
 
 async function graph(path, method, body) {
