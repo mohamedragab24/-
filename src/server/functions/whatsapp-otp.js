@@ -15,7 +15,7 @@
  * متغيرات البيئة (كلها اختيارية إلا لو هتستخدم القوالب):
  *  WHATSAPP_OTP_TEMPLATE_NAME   (افتراضي: fahemt_otp)
  *  WHATSAPP_OTP_TEMPLATE_LANG   (افتراضي: ar)
- *  WHATSAPP_OTP_TEMPLATE_MODE   utility | auth  (افتراضي: utility)
+ *  WHATSAPP_OTP_TEMPLATE_MODE   utility | auth  (افتراضي: auth)
  *  WHATSAPP_DEFAULT_COUNTRY_CODE (افتراضي: 20 لمصر)
  *  WHATSAPP_OTP_TTL_MINUTES     (افتراضي: 5)
  */
@@ -111,7 +111,7 @@ async function graphSend(payload) {
 async function sendViaTemplate(waNumber, code) {
   const name = env('WHATSAPP_OTP_TEMPLATE_NAME') || 'fahemt_otp';
   const lang = env('WHATSAPP_OTP_TEMPLATE_LANG') || 'ar';
-  const mode = (env('WHATSAPP_OTP_TEMPLATE_MODE') || 'utility').toLowerCase();
+  const mode = (env('WHATSAPP_OTP_TEMPLATE_MODE') || 'auth').toLowerCase();
 
   const components = [{ type: 'body', parameters: [{ type: 'text', text: code }] }];
   // قوالب التحقق (Authentication) بتحتاج الكود مرتين: في النص وفي زر النسخ
@@ -143,6 +143,27 @@ async function deliver(waNumber, code) {
     const out = await sendViaText(waNumber, code, minutes);
     return { ...out, templateError: String(e?.message || e) };
   }
+}
+
+/** إثبات موقّع إن الرقم اتأكد فعلاً (يُستخدم بعد إنشاء الحساب مباشرة) */
+function proofSecret() {
+  return env('OTP_PROOF_SECRET') || env('WHATSAPP_APP_SECRET') || env('FIREBASE_SERVICE_ACCOUNT') || 'fahemt-otp';
+}
+function makeProof(waNumber) {
+  const exp = Date.now() + 15 * 60 * 1000;
+  const payload = `${waNumber}.${exp}`;
+  const sig = crypto.createHmac('sha256', proofSecret()).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+function checkProof(proof, waNumber) {
+  const parts = String(proof || '').split('.');
+  if (parts.length !== 3) return false;
+  const [phone, exp, sig] = parts;
+  if (phone !== waNumber) return false;
+  if (!Number(exp) || Number(exp) < Date.now()) return false;
+  const expected = crypto.createHmac('sha256', proofSecret()).update(`${phone}.${exp}`).digest('base64url');
+  if (expected.length !== sig.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig));
 }
 
 /** إنشاء وإرسال كود */
@@ -267,7 +288,7 @@ async function verifyOtp(request) {
     }
   }
 
-  return { ok: true, phone: waNumber, uid, customToken, purpose: doc.purpose || 'login' };
+  return { ok: true, phone: waNumber, uid, customToken, purpose: doc.purpose || 'login', proof: makeProof(waNumber) };
 }
 
 /** إرسال كود تجريبي من لوحة التحكم (أدمن فقط — الفحص في index.js) */
@@ -280,7 +301,7 @@ function otpConfig() {
   return {
     templateName: env('WHATSAPP_OTP_TEMPLATE_NAME') || 'fahemt_otp',
     templateLang: env('WHATSAPP_OTP_TEMPLATE_LANG') || 'ar',
-    templateMode: (env('WHATSAPP_OTP_TEMPLATE_MODE') || 'utility').toLowerCase(),
+    templateMode: (env('WHATSAPP_OTP_TEMPLATE_MODE') || 'auth').toLowerCase(),
     ttlMinutes: Math.round(ttlMs() / 60000),
     maxAttempts: MAX_ATTEMPTS,
     maxSendsPerHour: MAX_SENDS_PER_HOUR,
@@ -290,7 +311,38 @@ function otpConfig() {
 module.exports = { sendOtp, verifyOtp, sendTestOtp, otpConfig, toWaNumber };
 
 // ===== الدوال القابلة للاستدعاء من الموقع/التطبيق عبر /api/fn/<name> =====
+/** بعد إنشاء الحساب: تثبيت إن رقم الموبايل متأكد (بيتحقق من الإثبات الموقّع) */
+async function markPhoneVerified(request) {
+  const uid = request?.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'لازم تسجل الدخول');
+  const data = request?.data || {};
+  const waNumber = toWaNumber(data.phone);
+  if (!waNumber) throw new HttpsError('invalid-argument', 'رقم الموبايل غير صحيح');
+  if (!checkProof(data.proof, waNumber)) {
+    throw new HttpsError('permission-denied', 'إثبات التحقق غير صالح أو انتهت صلاحيته. أكد الرقم تاني.');
+  }
+  const ref = db().collection('users').doc(uid);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'الحساب غير موجود');
+  const profile = snap.data() || {};
+  const stored = toWaNumber(profile.phoneNumber || profile.phone || '');
+  if (stored && stored !== waNumber) {
+    throw new HttpsError('failed-precondition', 'الرقم المؤكد مختلف عن الرقم المسجل في الحساب.');
+  }
+  await ref.set(
+    {
+      phoneNumber: profile.phoneNumber || waNumber,
+      phoneVerified: true,
+      phoneVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+      phoneVerifiedChannel: 'whatsapp',
+    },
+    { merge: true }
+  );
+  return { ok: true, phone: waNumber };
+}
+
 module.exports.sendWhatsappOtp = onCall(async (request) => sendOtp(request));
+module.exports.markPhoneVerified = onCall(async (request) => markPhoneVerified(request));
 module.exports.verifyWhatsappOtp = onCall(async (request) => verifyOtp(request));
 module.exports.sendWhatsappOtpTest = onCall(async (request) => {
   const uid = request?.auth?.uid;
