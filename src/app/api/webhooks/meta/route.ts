@@ -27,3 +27,5 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   return whatsappPost(request);
 }
+
+// redeploy: second app secret env added
