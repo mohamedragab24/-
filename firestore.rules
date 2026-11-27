@@ -357,5 +357,21 @@ service cloud.firestore {
       allow write: if false;
     }
 
+
+    // ===== بوت واتساب =====
+    // القراءة للأدمن فقط. الكتابة الأساسية من السيرفر (webhook ميتا) عبر Admin SDK.
+    // الأدمن يقدر يوقف/يشغّل البوت في محادثة أو يعلّمها كمقروءة من اللوحة.
+    match /whatsappConversations/{waId} {
+      allow read: if isAdmin();
+      allow update: if isAdmin() && request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['botEnabled', 'status', 'handoff', 'unread', 'handoffAt', 'tags', 'updatedAt']);
+      allow create, delete: if false;
+
+      match /messages/{msgId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+
   }
 }

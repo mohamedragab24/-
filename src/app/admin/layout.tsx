@@ -10,7 +10,8 @@ import {
   FileCheck, ShieldCheck, MessageSquare, Image as ImageIcon, 
   Layers, Filter, Palette, Share2, ClipboardList, Video, 
   History, Download, Ticket, CloudUpload, Bot, Bug, Lock, 
-  Fingerprint, Scale, Archive, GraduationCap, Bell, BookOpen, WalletCards, Smartphone
+  Fingerprint, Scale, Archive, GraduationCap, Bell, BookOpen, WalletCards, Smartphone,
+  MessageCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -95,6 +96,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       title: "الدعم والتوظيف",
       items: [
         { label: "تذاكر الدعم", href: "/admin/support", icon: HelpCircle },
+        { label: "بوت واتساب", href: "/admin/whatsapp", icon: MessageCircle },
         { label: "الشات العائم", href: "/admin/floating-chats", icon: MessageSquare },
         { label: "اختبار المراسلات", href: "/admin/comm-test", icon: Bug },
         { label: "إدارة التوظيف", href: "/admin/jobs", icon: Briefcase },

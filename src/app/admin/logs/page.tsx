@@ -40,6 +40,8 @@ function actionMeta(action: string) {
     case 'unverify_user':    return { label: "إلغاء توثيق",      icon: BadgeMinus,  cls: "bg-zinc-500",   group: "users" };
     case 'ban_user':         return { label: "حظر مستخدم",       icon: Ban,         cls: "bg-red-600",    group: "users" };
     case 'unban_user':       return { label: "فك حظر",           icon: CheckCheck,  cls: "bg-green-600",  group: "users" };
+    case 'whatsapp_handoff': return { label: "تحويل واتساب لموظف", icon: BellRing,  cls: "bg-emerald-600", group: "other" };
+    case 'whatsapp_reply':   return { label: "رد واتساب",          icon: Activity,  cls: "bg-emerald-500", group: "other" };
     case 'update_settings':  return { label: "تعديل إعدادات",    icon: Settings2,   cls: "bg-purple-600", group: "edits" };
     case 'edit_content':     return { label: "تعديل محتوى",      icon: Pencil,      cls: "bg-indigo-500", group: "edits" };
     case 'delete_item':      return { label: "حذف عنصر",         icon: Trash2,      cls: "bg-red-500",    group: "edits" };
