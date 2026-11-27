@@ -43,3 +43,7 @@ next-env.d.ts
 # firebase
 firebase-debug.log
 firestore-debug.log
+# جسر الواتساب غير الرسمي — ممنوع ترفع الجلسة أو الكود اللي فيه توكنات
+bridge/session/
+bridge/last-qr.txt
+bridge/node_modules/
