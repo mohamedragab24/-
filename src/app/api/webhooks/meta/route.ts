@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ error: "Webhook verification failed" }, { status: 403 });
 }
 
-// Meta may still deliver WhatsApp events to this URL: hand them to the bot handler.
+// Meta may still deliver WhatsApp events to this URL: hand them to the bot handler (signature checked there).
 export async function POST(request: NextRequest) {
   return whatsappPost(request);
 }
