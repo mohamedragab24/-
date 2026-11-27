@@ -246,7 +246,16 @@ async function handleIncoming(m) {
     text = text.trim().slice(PREFIX.length).trim();
   }
 
-  const waId = map.waIdFromJid(jid);
+  let waId = map.waIdFromJid(jid);
+  if (jid.endsWith('@lid')) {
+    // واتساب بيبعت أحيانا معرّف LID بدل الرقم؛ نجيب الرقم الحقيقي
+    let pn = m.key.senderPn || m.key.remoteJidAlt || m.key.participantPn || '';
+    if (!pn) {
+      try { pn = (await sock.signalRepository?.lidMapping?.getPNForLID?.(jid)) || ''; } catch (_) {}
+    }
+    if (!pn) log('lid بدون رقم، مفاتيح الرسالة:', Object.keys(m.key).join(','));
+    else waId = map.waIdFromJid(String(pn));
+  }
   if (!waId) return;
 
   const name = m.pushName || '';
