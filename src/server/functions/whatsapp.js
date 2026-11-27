@@ -186,7 +186,7 @@ async function loadBotSettings() {
     const data = snap.exists ? snap.data() || {} : {};
     return {
       enabled: data.enabled !== false,
-      texts: { ...DEFAULT_TEXT, ...(data.texts || {}) },
+      texts: { ...DEFAULT_TEXT, ...Object.fromEntries(Object.entries(data.texts || {}).filter(([, v]) => typeof v === 'string' && v.trim())) },
       extraFaqs: Array.isArray(data.faqs) ? data.faqs.filter((f) => f && f.question && f.answer) : [],
       handoffKeywords: Array.isArray(data.handoffKeywords) && data.handoffKeywords.length ? data.handoffKeywords : [],
       businessHours: data.businessHours || '٩ صباحاً - ١٠ مساءً',
