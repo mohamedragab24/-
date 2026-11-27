@@ -152,7 +152,7 @@ async function start() {
       auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
       logger,
       version,
-      browser: ['Fahemt Bot', 'Chrome', '1.0.0'],
+      browser: ['Ubuntu', 'Chrome', '22.04.4'],
       syncFullHistory: false,
       markOnlineOnConnect: false,
       generateHighQualityLinkPreview: false,
@@ -165,15 +165,21 @@ async function start() {
 
     // الربط بكود بدل QR (أسهل بكتير على سيرفر)
     if (PAIR_PHONE && !state.creds.registered) {
-      setTimeout(async () => {
+      const thisSock = sock;
+      const askCode = async () => {
+        if (thisSock !== sock || ready || state.creds.registered) return;
         try {
-          const code = await sock.requestPairingCode(PAIR_PHONE);
+          const code = await thisSock.requestPairingCode(PAIR_PHONE);
           log('=== كود الربط:', code, '=== من موبايل رقم البوت: الإعدادات → الأجهزة المرتبطة → الربط برقم الهاتف');
-          try { fs.writeFileSync(path.join(__dirname, 'pair-code.txt'), String(code), { mode: 0o600 }); } catch (_) {}
         } catch (e) {
           log('pairing code failed:', e.message);
         }
-      }, 3000);
+      };
+      setTimeout(askCode, 3000);
+      const pairTimer = setInterval(() => {
+        if (thisSock !== sock || ready || state.creds.registered) { clearInterval(pairTimer); return; }
+        askCode();
+      }, 90000);
     }
 
     sock.ev.on('connection.update', (update) => {
