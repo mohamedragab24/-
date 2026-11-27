@@ -3,6 +3,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,8 +11,9 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useFirebase, useUser, useFirestore } from "@/firebase";
 import { initiateEmailSignIn, initiateEmailSignUp } from "@/firebase/non-blocking-login";
 import { useRouter, useSearchParams } from "next/navigation";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { 
   Mail, 
   Loader2, 
@@ -20,6 +22,8 @@ import {
   User, 
   Eye, 
   EyeOff,
+  Send,
+  MessageCircle,
   Globe,
   Lock
 } from "lucide-react";
@@ -82,6 +86,15 @@ function LoginContent() {
   const [birthDate, setBirthDate] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+
+  // تأكيد رقم الموبايل بكود واتساب (يُفعَّل من لوحة التحكم: settings/whatsappBot.requireOtpOnSignup)
+  const [requireOtp, setRequireOtp] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpProof, setOtpProof] = useState<string | null>(null);
+  const [otpBusy, setOtpBusy] = useState(false);
+  const [otpCountdown, setOtpCountdown] = useState(0);
 
   // الكشف عن الدولة تلقائياً حسب IP
   useEffect(() => {
@@ -180,6 +193,11 @@ function LoginContent() {
       return;
     }
 
+    if (requireOtp && !otpVerified) {
+      toast({ variant: "destructive", title: "أكد رقم الموبايل الأول", description: "اضغط «أرسل كود على واتساب» وأدخل الكود اللي هيوصلك." });
+      return;
+    }
+
     setIsProcessing(true);
     try {
       const cred = await initiateEmailSignUp(auth, email, password);
@@ -202,6 +220,15 @@ function LoginContent() {
           needsProfileCompletion: true
           // لا تُخزَّن كلمة المرور في Firestore أبدًا (تُدار عبر Firebase Auth فقط)
         });
+
+        if (otpVerified && otpProof) {
+          try {
+            const mark = httpsCallable(getFunctions(), "markPhoneVerified");
+            await mark({ phone: `${countryCode}${phoneNumber}`, proof: otpProof });
+          } catch (e) {
+            console.warn("markPhoneVerified failed", e);
+          }
+        }
 
         toast({ title: "تم إنشاء الحساب بنجاح!" });
         router.push("/profile");
@@ -312,6 +339,59 @@ function LoginContent() {
                   {selectedCountry?.name}: مطلوب {selectedCountry?.length} أرقام {selectedCountry?.start.length ? `تبدأ بـ ${selectedCountry.start.join('/')}` : ''}.
                 </p>
               </div>
+
+              {requireOtp && (
+                <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50/60 p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="font-black flex items-center gap-2">
+                      <MessageCircle size={16} className="text-emerald-600" /> تأكيد رقم الموبايل على واتساب
+                    </Label>
+                    {otpVerified && <Badge className="bg-emerald-600">تم التأكيد ✅</Badge>}
+                  </div>
+
+                  {otpVerified ? (
+                    <p className="text-sm font-bold text-emerald-700">رقمك اتأكد، كمّل التسجيل عادي.</p>
+                  ) : (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={sendOtpCode}
+                        disabled={otpBusy || otpCountdown > 0}
+                        className="w-full h-12 rounded-xl gap-2 font-black"
+                      >
+                        {otpBusy ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
+                        {otpCountdown > 0 ? `إعادة الإرسال بعد ${otpCountdown} ثانية` : otpSent ? "إرسال كود جديد" : "أرسل كود على واتساب"}
+                      </Button>
+
+                      {otpSent && (
+                        <div className="flex gap-2" dir="ltr">
+                          <Input
+                            value={otpCode}
+                            onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                            placeholder="000000"
+                            inputMode="numeric"
+                            maxLength={6}
+                            className="h-14 rounded-xl border-2 font-black text-center text-2xl tracking-[0.4em]"
+                          />
+                          <Button
+                            type="button"
+                            onClick={verifyOtpCode}
+                            disabled={otpBusy || otpCode.length !== 6}
+                            className="h-14 rounded-xl px-6 font-black"
+                          >
+                            تأكيد
+                          </Button>
+                        </div>
+                      )}
+
+                      <p className="text-[11px] font-bold text-muted-foreground">
+                        هيوصلك كود من 6 أرقام على واتساب الرقم اللي كتبته. لو الرقم مش عليه واتساب، غيّر الرقم.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label className="font-black">تاريخ الميلاد</Label>
