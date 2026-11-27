@@ -661,6 +661,50 @@ exports.grantAdmin = onCall(async (request) => {
   return { ok: true, uid: target.uid };
 });
 
+/** Create a brand-new admin account (Auth user + Firestore profile) from the admin panel. */
+exports.createAdminAccount = onCall(async (request) => {
+  if (!(await isAdminRequest(request))) throw new HttpsError('permission-denied', 'ليس لديك صلاحية الأدمن');
+  const fullName = String(request.data?.fullName || '').trim();
+  const email = String(request.data?.email || '').trim().toLowerCase();
+  const password = String(request.data?.password || '');
+  const permissions = Array.isArray(request.data?.permissions) ? request.data.permissions.map(String).slice(0, 10) : ['support'];
+  if (!fullName || !email || !email.includes('@')) throw new HttpsError('invalid-argument', 'أدخل الاسم والبريد الإلكتروني');
+  if (password.length < 6) throw new HttpsError('invalid-argument', 'كلمة المرور يجب ألا تقل عن 6 أحرف');
+  let record;
+  try {
+    record = await admin.auth().createUser({ email, password, displayName: fullName });
+  } catch (e) {
+    if (e?.code === 'auth/email-already-exists') throw new HttpsError('already-exists', 'هذا البريد مستخدم بالفعل في حساب آخر');
+    throw new HttpsError('internal', 'تعذر إنشاء حساب الدخول: ' + (e?.message || 'خطأ غير معروف'));
+  }
+  await admin.auth().setCustomUserClaims(record.uid, { admin: true });
+  await db.collection('users').doc(record.uid).set({
+    id: record.uid,
+    uid: record.uid,
+    fullName,
+    email,
+    role: 'admin',
+    isAdmin: true,
+    adminPermissions: permissions,
+    status: 'active',
+    isProfileApproved: true,
+    needsProfileCompletion: false,
+    createdAt: new Date().toISOString(),
+    adminGrantedAt: admin.firestore.FieldValue.serverTimestamp(),
+    adminGrantedBy: request.auth.uid,
+  }, { merge: true });
+  await db.collection('adminLogs').add({
+    action: 'create_admin',
+    targetUserId: record.uid,
+    targetUserName: fullName,
+    details: `تم إنشاء حساب أدمن جديد بالصلاحيات: ${permissions.join(', ')}`,
+    adminId: request.auth.uid,
+    grantedBy: request.auth.uid,
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  return { ok: true, uid: record.uid };
+});
+
 /** Temporarily block a user and disable Firebase Authentication. */
 exports.setUserBan = onCall(async (request) => {
   const uid = request.auth?.uid;
@@ -883,6 +927,21 @@ exports.getAgoraMeetingToken = onCall(async (request) => {
   const certificate = String(process.env.AGORA_APP_CERTIFICATE || '').trim();
   if (!appId || !certificate) throw new HttpsError('failed-precondition', 'إعدادات الاجتماع غير مكتملة على الخادم', { cause: 'ناقص في Vercel: ' + [!appId && 'AGORA_APP_ID', !certificate && 'AGORA_APP_CERTIFICATE'].filter(Boolean).join(', ') + '.', fix: 'أضف المتغيرات من Agora Console ← Project Management ثم Redeploy.' });
 
+  // التسجيل الإجباري لكل محاضرة: عندما يطلب الطرفان (الطالب والمُفهم) توكن الدخول يبدأ بوت التسجيل
+  // تلقائيًا من السيرفر، بدون الاعتماد على التطبيق. لا يسجَّل انتظار طرف واحد وحده توفيرًا للتكلفة.
+  if (!isAdmin) {
+    try {
+      const side = uid === meeting.mustafhemId ? 'mustafhem' : (uid === meeting.mufhemId ? 'mufhem' : null);
+      if (side) {
+        await meetingSnap.ref.update({ [`meetingJoins.${side}`]: Date.now() }).catch(() => {});
+        const joined = { ...(meeting.meetingJoins || {}), [side]: Date.now() };
+        if (joined.mustafhem && joined.mufhem && !(meeting.recordingOpen || meeting.recordingStopped || meeting.recordingJob)) {
+          await require('./session')._ensureIstifhamRecording(requestId);
+        }
+      }
+    } catch (e) { console.error('auto-start istifham recording failed', requestId, e); }
+  }
+
   const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
   const channel = `Fahimni_${requestId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
   let numericUid = 0;
@@ -1053,3 +1112,5 @@ Object.assign(exports, require('./session'));
 Object.assign(exports, require('./refunds'));
 Object.assign(exports, require('./diagnose'));
 Object.assign(exports, require('./device-recording'));
+// رموز التحقق (OTP) عبر واتساب
+Object.assign(exports, require('./whatsapp-otp'));

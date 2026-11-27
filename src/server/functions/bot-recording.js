@@ -74,7 +74,7 @@ async function start(id, meta, channel, prefix, payload) {
     const url = pageUrl({ ...payload, ch: channel });
     if (!url) webError = 'REC_PAGE_BASE_URL غير مضبوط: سيُسجَّل الصوت والفيديو فقط (بدون السبورة والملفات)';
     else {
-      try { state = { ...(await rec.startWebRecording({ channel, pageUrl: url, prefix })), prefix }; }
+      try { state = { ...(await rec.startWebRecording({ cname: channel, pageUrl: url, prefix })), prefix }; }
       catch (e) { webError = msg(e); console.error('web recording failed, falling back to mix', id, webError); }
     }
     if (!state) state = { ...(await rec.startRecording({ channel, groupId: meta.groupId, prefix })), prefix };

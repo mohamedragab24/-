@@ -10,7 +10,8 @@ import {
   FileCheck, ShieldCheck, MessageSquare, Image as ImageIcon, 
   Layers, Filter, Palette, Share2, ClipboardList, Video, 
   History, Download, Ticket, CloudUpload, Bot, Bug, Lock, 
-  Fingerprint, Scale, Archive, GraduationCap, Bell, BookOpen, WalletCards, Smartphone
+  Fingerprint, Scale, Archive, GraduationCap, Bell, BookOpen, WalletCards, Smartphone,
+  MessageCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,7 +28,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       items: [
         { label: "الإحصائيات", href: "/admin", icon: LayoutDashboard },
         { label: "فحص النظام والأخطاء", href: "/admin/system-check", icon: Activity },
-        { label: "سجل الرقابة", href: "/admin/logs", icon: History },
+        { label: "إشعارات الأدمن", href: "/admin/logs", icon: Bell },
         { label: "المزامنة vNext", href: "/admin/deployment", icon: CloudUpload },
         { label: "الذكاء الاصطناعي", href: "/admin/ai", icon: Bot },
       ]
@@ -55,6 +56,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { label: "الطلبات المكتملة", href: "/admin/completed-orders", icon: CheckCircle2 },
         { label: "مراجعة المحاضرات", href: "/admin/sessions", icon: Video },
         { label: "تسجيلات الجلسات (شكاوى)", href: "/admin/session-recordings", icon: Video },
+        { label: "تسجيلات المحاضرات والميتنجات", href: "/admin/lecture-recordings", icon: Video },
         { label: "طلبات تغيير الجهاز", href: "/admin/device-requests", icon: Video },
         { label: "طلبات الاسترداد", href: "/admin/refunds", icon: Video },
         { label: "المجموعات والفواتير", href: "/admin/groups", icon: Users },
@@ -94,6 +96,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       title: "الدعم والتوظيف",
       items: [
         { label: "تذاكر الدعم", href: "/admin/support", icon: HelpCircle },
+        { label: "بوت واتساب", href: "/admin/whatsapp", icon: MessageCircle },
         { label: "الشات العائم", href: "/admin/floating-chats", icon: MessageSquare },
         { label: "اختبار المراسلات", href: "/admin/comm-test", icon: Bug },
         { label: "إدارة التوظيف", href: "/admin/jobs", icon: Briefcase },

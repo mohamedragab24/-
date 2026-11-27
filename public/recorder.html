@@ -214,7 +214,7 @@
   // ===== Agora =====
   async function start() {
     try {
-      var client = AgoraRTC.createClient({ mode: 'live', codec: 'vp8' });
+      var client = AgoraRTC.createClient({ mode: 'live', codec: 'h264' });
       await client.setClientRole('audience');
       client.on('user-joined', function (u) { ensureUser(u.uid); });
       client.on('user-left', function (u) { var x = users[u.uid]; if (x) { x.tile.remove(); delete users[u.uid]; delete hands[u.uid]; layout(); showHands(); } });
