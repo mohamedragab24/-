@@ -1,16 +1,18 @@
 {
   "name": "fahemt-whatsapp-bridge",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "جسر واتساب غير رسمي (QR) لبوت فهمت — يشتغل على سيرفر صغير ويستخدم نفس منطق البوت على Vercel",
+  "description": "جسر واتساب غير رسمي (Baileys) لبوت فهمت — بدون متصفح، بيشتغل على استضافة مجانية 256 ميجا",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "whatsapp-web.js": "^1.34.8",
-    "qrcode-terminal": "^0.12.0",
-    "firebase-admin": "^12.6.0"
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.24",
+    "firebase-admin": "^12.6.0",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
   },
   "engines": {
     "node": ">=20"

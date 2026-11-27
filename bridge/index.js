@@ -1,63 +1,62 @@
 'use strict';
 
 /**
- * جسر واتساب غير رسمي (QR) لبوت فهمت.
+ * جسر واتساب غير رسمي (Baileys) لبوت فهمت.
  *
- * بيشتغل كجهاز مرتبط (linked device) زي واتساب ويب على رقم مخصص للبوت،
- * وبيستخدم نفس منطق البوت الموجود على Vercel:
- *   رسالة واردة → POST /api/whatsapp/bridge (بهيدر x-bridge-secret) → ردود → إرسال من هنا.
+ * ليه Baileys مش whatsapp-web.js؟
+ *   whatsapp-web.js بيشغّل كروميوم كامل (500 ميجا رام+) — مش بيدخل في استضافة مجانية 256 ميجا.
+ *   Baileys بيتكلم مع واتساب WebSocket مباشرة من غير أي متصفح، ووزنه في التشغيل حوالي 110 ميجا.
+ *   نفس الفكرة: جهاز مرتبط على رقم مخصص، وبيستخدم نفس منطق البوت على Vercel.
+ *
+ * طريقة الشغل:
+ *   رسالة واردة → POST {PLATFORM_URL}/api/whatsapp/bridge (هيدر x-bridge-secret) → ردود → إرسال من هنا.
  *   ردود الأدمن من اللوحة → Firestore (whatsappOutbox) → هنا يبعتها ويعلّمها sent.
+ *   الجلسة على القرص + نسخة احتياطية في Firestore (bridgeAuth/whatsapp) لو القرص اتمسح.
  *
  * تحذير: الطريقة دي غير رسمية ومخالفة لشروط واتساب، والرقم ممكن يتحظر في أي وقت.
- * الرقم لازم يكون مخصص للبوت بس.
  *
  * متغيرات البيئة:
- *   PLATFORM_URL              https://fahemt.online
+ *   PLATFORM_URL              https://www.fahemt.online
  *   BRIDGE_SECRET             نفس القيمة اللي على Vercel
  *   FIREBASE_SERVICE_ACCOUNT  محتوى ملف الخدمة كـ JSON في سطر واحد
- *   SESSION_PATH              مجلد حفظ الجلسة (افتراضي ./session)
+ *   AUTH_DIR                  مجلد الجلسة (افتراضي ./auth)
+ *   PAIR_PHONE                رقم البوت بالصيغة الدولية بدون + (مثال 201203867635) — ربط بكود
  *   PORT                      بورت فحص الصحة (افتراضي 8080)
- *   PAIR_PHONE                رقم البوت بالصيغة الدولية بدون + (اختياري): بيربط بكود
- *                             من الموبايل بدل مسح QR
- *   PUPPETEER_EXECUTABLE_PATH كروم/كروميوم النظام لو مش عايز النسخة اللي بينزّلها puppeteer
  *   BRIDGE_ALLOW_GROUPS       1 = يرد في الجروبات كمان (افتراضي 0)
  *   BRIDGE_PREFIX             اختياري: بادئة لازم تكون في أول الرسالة في الجروبات
+ *   AUTH_BACKUP               off = اقفل النسخة الاحتياطية (افتراضي on)
  */
 
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const admin = require('firebase-admin');
+const pino = require('pino');
 const qrcode = require('qrcode-terminal');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  makeCacheableSignalKeyStore,
+  fetchLatestBaileysVersion,
+  DisconnectReason,
+} = require('@whiskeysockets/baileys');
+const map = require('./lib/map');
 
-const PLATFORM_URL = (process.env.PLATFORM_URL || 'https://fahemt.online').replace(/\/+$/, '');
+const PLATFORM_URL = (process.env.PLATFORM_URL || 'https://www.fahemt.online').replace(/\/+$/, '');
 const BRIDGE_SECRET = String(process.env.BRIDGE_SECRET || '').trim();
-const SESSION_PATH = process.env.SESSION_PATH || path.join(__dirname, 'session');
+const AUTH_DIR = process.env.AUTH_DIR || path.join(__dirname, 'auth');
 const PORT = Number(process.env.PORT || 8080);
 const ALLOW_GROUPS = String(process.env.BRIDGE_ALLOW_GROUPS || '0') === '1';
 const PREFIX = String(process.env.BRIDGE_PREFIX || '').trim();
 const PAIR_PHONE = String(process.env.PAIR_PHONE || '').replace(/[^\d]/g, '');
-
-// رد الأدمن اللي عدّى عليه ده أكتر من كده بيتعلّم expired بدل ما يتبعت متأخر
+const AUTH_BACKUP = String(process.env.AUTH_BACKUP || 'on') !== 'off';
 const OUTBOX_MAX_AGE_MS = 15 * 60 * 1000;
+const AUTH_DOC = 'whatsapp';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
+const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 
-function writePrivate(file, content) {
-  try {
-    fs.writeFileSync(file, content, { mode: 0o600 });
-    fs.chmodSync(file, 0o600);
-  } catch (e) {
-    log('write failed:', file, e.message);
-  }
-}
-
-function rmQuiet(file) {
-  try { fs.unlinkSync(file); } catch (_) {}
-}
-
-// ===== Firebase (للـ outbox) =====
+// ===== Firebase =====
 let db = null;
 try {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
@@ -73,200 +72,243 @@ try {
   log('firebase init failed:', e.message);
 }
 
-// ===== كروميوم =====
-function chromiumPath() {
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
-  for (const p of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome', '/snap/bin/chromium']) {
-    if (fs.existsSync(p)) return p;
+// ===== نسخة احتياطية للجلسة (لو القرص اتمسح) =====
+const authBackupRef = () => (db ? db.collection('bridgeAuth').doc(AUTH_DOC) : null);
+
+async function restoreAuth() {
+  if (!db || !AUTH_BACKUP) return false;
+  const dirHasFiles = fs.existsSync(AUTH_DIR) && fs.readdirSync(AUTH_DIR).some((f) => f.endsWith('.json'));
+  if (dirHasFiles) return false; // الجلسة على القرص أحدث — منستعدهاش
+  try {
+    const snap = await authBackupRef().get();
+    if (!snap.exists) return false;
+    const files = snap.data()?.files || {};
+    const names = Object.keys(files);
+    if (!names.length) return false;
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
+    for (const name of names) {
+      fs.writeFileSync(path.join(AUTH_DIR, name), Buffer.from(String(files[name]), 'base64'), { mode: 0o600 });
+    }
+    log('auth restored from firestore:', names.length, 'ملف');
+    return true;
+  } catch (e) {
+    log('auth restore failed:', e.message);
+    return false;
   }
-  return null;
 }
 
-const chrome = chromiumPath();
-log('chromium:', chrome || '(نسخة puppeteer المدمجة)');
+let backupTimer = null;
+let backupBusy = false;
 
-// ===== عميل واتساب =====
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
-  puppeteer: {
-    headless: true,
-    ...(chrome ? { executablePath: chrome } : {}),
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-  },
-});
-
-let ready = false;
-let pairingRequested = false;
-
-client.on('qr', async (qr) => {
-  if (PAIR_PHONE) {
-    // ربط بكود من الموبايل: أسهل بكتير من مسح QR من ترمينال سيرفر
-    if (pairingRequested) return;
-    pairingRequested = true;
+function scheduleAuthBackup(reason) {
+  if (!db || !AUTH_BACKUP) return;
+  if (backupTimer) return;
+  backupTimer = setTimeout(async () => {
+    backupTimer = null;
+    if (backupBusy) return;
+    backupBusy = true;
     try {
-      const code = await client.requestPairingCode(PAIR_PHONE, false);
-      log('=== كود الربط:', code, '=== ادخله من موبايل رقم البوت: الإعدادات → الأجهزة المرتبطة → ربط بكود');
-      writePrivate(path.join(__dirname, 'pair-code.txt'), String(code));
-    } catch (e) {
-      pairingRequested = false;
-      log('pairing code failed:', e.message, '— جرّب QR');
-      qrcode.generate(qr, { small: true });
-      writePrivate(path.join(__dirname, 'last-qr.txt'), qr);
-    }
-    return;
-  }
-  log('=== امسح الكود من واتساب: الأجهزة المرتبطة → ربط جهاز ===');
-  qrcode.generate(qr, { small: true });
-  writePrivate(path.join(__dirname, 'last-qr.txt'), qr);
-});
-
-client.on('authenticated', () => log('authenticated'));
-client.on('auth_failure', (m) => log('auth_failure:', m));
-client.on('change_state', (s) => log('state:', s));
-
-client.on('ready', () => {
-  ready = true;
-  rmQuiet(path.join(__dirname, 'last-qr.txt'));
-  rmQuiet(path.join(__dirname, 'pair-code.txt'));
-  log('ready — البوت متصل. الرقم:', client.info?.wid?.user || '؟');
-  sweepOutbox();
-});
-
-client.on('disconnected', (reason) => {
-  ready = false;
-  log('disconnected:', reason, '— إعادة الاتصال بعد 15 ثانية');
-  setTimeout(() => client.initialize().catch((e) => log('reinit failed', e.message)), 15000);
-});
-
-/** يبعت ردود البوت اللي راجعة من المنصة */
-async function deliver(chatId, replies) {
-  for (const reply of replies || []) {
-    try {
-      if (reply.type === 'text') {
-        await client.sendMessage(chatId, String(reply.body || ''));
-      } else if (reply.type === 'list') {
-        // واتساب غير الرسمي مبيعملش قوايم تفاعلية — بنبعتها كنص مرقّم
-        const lines = [reply.body || ''];
-        if (Array.isArray(reply.rows) && reply.rows.length) {
-          lines.push('');
-          reply.rows.forEach((r, i) => lines.push(`${i + 1}) ${r.title}`));
-          lines.push('');
-          lines.push(`اكتب رقم الاختيار (1-${reply.rows.length}) أو كلامك عادي.`);
-        }
-        await client.sendMessage(chatId, lines.filter(Boolean).join('\n'));
-      } else if (reply.type === 'buttons') {
-        const lines = [reply.body || ''];
-        if (Array.isArray(reply.buttons) && reply.buttons.length) {
-          lines.push('');
-          reply.buttons.forEach((b, i) => lines.push(`${i + 1}) ${b.title}`));
-        }
-        await client.sendMessage(chatId, lines.filter(Boolean).join('\n'));
+      const files = fs.existsSync(AUTH_DIR) ? fs.readdirSync(AUTH_DIR).filter((f) => f.endsWith('.json')) : [];
+      const out = {};
+      let total = 0;
+      for (const name of files) {
+        const buf = fs.readFileSync(path.join(AUTH_DIR, name));
+        total += buf.length;
+        if (total > 700 * 1024) break; // حد مستند Firestore 1 ميجا
+        out[name] = buf.toString('base64');
       }
+      if (!Object.keys(out).length) return;
+      await authBackupRef().set({ files: out, count: Object.keys(out).length, updatedAt: admin.firestore.FieldValue.serverTimestamp(), reason: reason || '' });
+      log('auth backup ok:', Object.keys(out).length, 'ملف');
     } catch (e) {
-      log('send failed:', e.message);
+      log('auth backup failed:', e.message);
+    } finally {
+      backupBusy = false;
     }
-  }
+  }, 20000);
 }
 
-/** آخر قائمة اتبعتت للعميل (لتحويل رقم مكتوب إلى اختيار) */
+// ===== حالة الاتصال =====
+let sock = null;
+let ready = false;
+let connecting = false;
+let reconnectTimer = null;
 const lastMenu = new Map();
 
-client.on('message', async (msg) => {
+async function start() {
+  if (connecting) return;
+  connecting = true;
   try {
-    if (msg.fromMe) return;
-    if (msg.from === 'status@broadcast') return;
-    const chat = await msg.getChat();
-    if (chat.isGroup && !ALLOW_GROUPS) return;
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
-    let text = String(msg.body || '').trim();
-    if (PREFIX && chat.isGroup && !text.startsWith(PREFIX)) return;
-    if (PREFIX) text = text.slice(PREFIX.length).trim();
-
-    const waId = String(msg.from || '').split('@')[0].replace(/[^\d]/g, '');
-    if (!waId) return;
-
-    const contact = await msg.getContact().catch(() => null);
-    const name = contact?.pushname || contact?.name || '';
-
-    // لو العميل كتب رقم من القائمة، نحوّله لاختيار
-    let choiceId = '';
-    const menu = lastMenu.get(waId);
-    if (menu && /^[1-9]$/.test(text)) {
-      const row = menu[Number(text) - 1];
-      if (row) choiceId = row.id;
+    let version;
+    try {
+      ({ version } = await fetchLatestBaileysVersion());
+    } catch (_) {
+      version = undefined;
     }
 
-    const type = msg.hasMedia ? (msg.type || 'document') : 'text';
-
-    const res = await fetch(`${PLATFORM_URL}/api/whatsapp/bridge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SECRET },
-      body: JSON.stringify({ from: waId, name, text, messageId: msg.id?._serialized || '', type, choiceId }),
-      signal: AbortSignal.timeout(45000),
+    sock = makeWASocket({
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+      logger,
+      version,
+      browser: ['Fahemt Bot', 'Chrome', '1.0.0'],
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
+      generateHighQualityLinkPreview: false,
     });
 
-    if (!res.ok) {
-      log('bridge HTTP', res.status, await res.text().catch(() => ''));
-      return;
+    sock.ev.on('creds.update', async () => {
+      await saveCreds();
+      scheduleAuthBackup('creds.update');
+    });
+
+    // الربط بكود بدل QR (أسهل بكتير على سيرفر)
+    if (PAIR_PHONE && !state.creds.registered) {
+      setTimeout(async () => {
+        try {
+          const code = await sock.requestPairingCode(PAIR_PHONE);
+          log('=== كود الربط:', code, '=== من موبايل رقم البوت: الإعدادات → الأجهزة المرتبطة → الربط برقم الهاتف');
+          try { fs.writeFileSync(path.join(__dirname, 'pair-code.txt'), String(code), { mode: 0o600 }); } catch (_) {}
+        } catch (e) {
+          log('pairing code failed:', e.message);
+        }
+      }, 3000);
     }
 
-    const data = await res.json();
-    for (const reply of data?.replies || []) {
-      if (reply.type === 'list' && Array.isArray(reply.rows)) lastMenu.set(waId, reply.rows);
-    }
-    await deliver(msg.from, data?.replies || []);
-    await chat.sendSeen().catch(() => {});
-    log(`in ${waId} -> ${(data?.replies || []).length} رد`);
+    sock.ev.on('connection.update', (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr && !PAIR_PHONE) {
+        log('=== امسح الكود من واتساب: الأجهزة المرتبطة → ربط جهاز ===');
+        qrcode.generate(qr, { small: true });
+      }
+
+      if (connection === 'open') {
+        ready = true;
+        connecting = false;
+        try { fs.unlinkSync(path.join(__dirname, 'pair-code.txt')); } catch (_) {}
+        log('ready — البوت متصل. الرقم:', sock?.user?.id || '؟');
+        scheduleAuthBackup('connected');
+        sweepOutbox();
+      }
+
+      if (connection === 'close') {
+        ready = false;
+        connecting = false;
+        const code = lastDisconnect?.error?.output?.statusCode;
+        const loggedOut = code === DisconnectReason.loggedOut;
+        log('connection closed:', code || '؟', loggedOut ? '(اتعمل logout — محتاج ربط جديد)' : '— إعادة اتصال بعد 10 ثواني');
+        if (loggedOut) {
+          log('الجلسة اتلغت من الموبايل. امسح مجلد', AUTH_DIR, 'وأعد الربط.');
+          return;
+        }
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => { reconnectTimer = null; start().catch((e) => log('restart failed:', e.message)); }, 10000);
+      }
+    });
+
+    sock.ev.on('messages.upsert', async (event) => {
+      if (event.type !== 'notify') return;
+      for (const m of event.messages || []) {
+        try {
+          await handleIncoming(m);
+        } catch (e) {
+          log('message handling failed:', e.message);
+        }
+      }
+    });
   } catch (e) {
-    log('message handling failed:', e.message);
+    connecting = false;
+    log('start failed:', e.message);
+    if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; start().catch(() => {}); }, 15000);
   }
-});
+}
+
+async function handleIncoming(m) {
+  if (!m?.key) return;
+  if (m.key.fromMe) return;
+  const jid = String(m.key.remoteJid || '');
+  if (!jid || jid === 'status@broadcast') return;
+  if (jid.endsWith('@g.us') && !ALLOW_GROUPS) return;
+  if (jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) return;
+  if (map.isEmpty(m)) return;
+
+  let text = map.extractText(m);
+  if (PREFIX && jid.endsWith('@g.us')) {
+    if (!text.trim().startsWith(PREFIX)) return;
+    text = text.trim().slice(PREFIX.length).trim();
+  }
+
+  const waId = map.waIdFromJid(jid);
+  if (!waId) return;
+
+  const name = m.pushName || '';
+  const type = map.mediaTypeOf(m);
+  const choiceId = map.choiceIdOf(m) || map.choiceFromText(text, lastMenu.get(waId));
+
+  const res = await fetch(`${PLATFORM_URL}/api/whatsapp/bridge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SECRET },
+    body: JSON.stringify({ from: waId, name, text, messageId: m.key.id || '', type, choiceId }),
+    signal: AbortSignal.timeout(45000),
+  });
+
+  if (!res.ok) {
+    log('bridge HTTP', res.status, await res.text().catch(() => ''));
+    return;
+  }
+
+  const data = await res.json();
+  const messages = map.repliesToMessages(data?.replies);
+  for (const item of messages) {
+    if (item.rows?.length) lastMenu.set(waId, item.rows);
+    await sock.sendMessage(jid, { text: item.text });
+  }
+  try { await sock.readMessages([m.key]); } catch (_) {}
+  log(`in ${waId} -> ${messages.length} رد`);
+}
 
 // ===== ردود الأدمن من اللوحة (outbox) =====
 const claimed = new Set();
 
-/** يحجز المستند ويعلّمه sending عشان ميتكررش، ويبعت بعد كده */
 async function processOutbox(ref, data) {
   const id = ref.id;
   if (claimed.has(id)) return;
   claimed.add(id);
+  const waId = String(data.waId || '');
+  const msgRef = waId && db ? db.collection('whatsappConversations').doc(waId).collection('messages').doc(`out_${id}`) : null;
   try {
     const age = data.createdAt?.toDate ? Date.now() - data.createdAt.toDate().getTime() : 0;
-    const msgRef = data.waId ? db.collection('whatsappConversations').doc(String(data.waId)).collection('messages').doc(`out_${id}`) : null;
-
     if (age > OUTBOX_MAX_AGE_MS) {
       await ref.set({ status: 'failed', error: 'expired', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       if (msgRef) await msgRef.set({ status: 'failed' }, { merge: true }).catch(() => {});
-      log('outbox expired ->', data.waId);
+      log('outbox expired ->', waId);
       return;
     }
 
-    const claimedOk = await db.runTransaction(async (tx) => {
+    const gotIt = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists || snap.data().status !== 'pending') return false;
       tx.set(ref, { status: 'sending' }, { merge: true });
       return true;
     });
-    if (!claimedOk) return;
+    if (!gotIt) return;
 
-    await client.sendMessage(`${data.waId}@c.us`, String(data.text || ''));
+    await sock.sendMessage(map.jidFromWaId(waId), { text: String(data.text || '') });
     await ref.set({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     if (msgRef) await msgRef.set({ status: 'sent' }, { merge: true }).catch(() => {});
-    log('outbox sent ->', data.waId);
+    log('outbox sent ->', waId);
   } catch (e) {
     const err = String(e.message || e).slice(0, 200);
     await ref.set({ status: 'failed', error: err, sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
-    if (data.waId) {
-      db.collection('whatsappConversations').doc(String(data.waId)).collection('messages').doc(`out_${ref.id}`)
-        .set({ status: 'failed' }, { merge: true }).catch(() => {});
-    }
-    log('outbox failed ->', data.waId, err);
+    if (msgRef) await msgRef.set({ status: 'failed' }, { merge: true }).catch(() => {});
+    log('outbox failed ->', waId, err);
   } finally {
     setTimeout(() => claimed.delete(id), 60000);
   }
 }
 
-/** مسح أولي بعد الاتصال (رسائل كانت مستنية والسيرفر واقف) */
 async function sweepOutbox() {
   if (!db) return;
   try {
@@ -286,8 +328,7 @@ function watchOutbox() {
         snap.docChanges().forEach((change) => {
           if (change.type !== 'added' && change.type !== 'modified') return;
           const data = change.doc.data() || {};
-          if (data.status !== 'pending') return;
-          if (!ready) return; // هيتبعت في sweepOutbox أول ما يتصل
+          if (data.status !== 'pending' || !ready) return;
           processOutbox(change.doc.ref, data);
         });
       },
@@ -296,7 +337,7 @@ function watchOutbox() {
   log('outbox watcher: ok');
 }
 
-// ===== فحص صحة (لمنصات الاستضافة) =====
+// ===== فحص صحة =====
 http
   .createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -304,14 +345,17 @@ http
   })
   .listen(PORT, () => log(`health on :${PORT}`));
 
-if (!BRIDGE_SECRET) log('تحذير: BRIDGE_SECRET غير موجود — المنصة هترفض كل الطلبات');
-if (!db) log('تحذير: ردود الأدمن من اللوحة مش هتوصل (Firebase مش متظبط)');
-
-watchOutbox();
-client.initialize().catch((e) => log('initialize failed:', e.message));
+(async () => {
+  if (!BRIDGE_SECRET) log('تحذير: BRIDGE_SECRET غير موجود — المنصة هترفض كل الطلبات');
+  if (!db) log('تحذير: ردود الأدمن من اللوحة مش هتوصل (Firebase مش متظبط)');
+  if (!PAIR_PHONE) log('ملاحظة: PAIR_PHONE مش متظبط — الربط هيبقى بـ QR في اللوج');
+  await restoreAuth();
+  watchOutbox();
+  await start();
+})();
 
 process.on('SIGTERM', async () => {
   log('SIGTERM — إغلاق');
-  try { await client.destroy(); } catch (_) {}
+  try { sock?.end(undefined); } catch (_) {}
   process.exit(0);
 });
