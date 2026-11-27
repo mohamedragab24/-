@@ -373,5 +373,12 @@ service cloud.firestore {
       }
     }
 
+    // طابور الإرسال للواتساب غير الرسمي (الجسر): اللوحة تكتب فيه من السيرفر،
+    // وخدمة الربط (Admin SDK) تقرأه وتعلّمه sent. مفيش كتابة من المتصفح.
+    match /whatsappOutbox/{outboxId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
   }
 }
