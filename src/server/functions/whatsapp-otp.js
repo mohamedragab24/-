@@ -133,8 +133,86 @@ async function sendViaText(waNumber, code, minutes) {
   return { via: 'text', messageId: res?.messages?.[0]?.id || null };
 }
 
+// ===== الإرسال عبر الجسر (واتساب غير رسمي) =====
+// الكود بيتكتب في طابور whatsappOutbox (kind:'otp') والجسر بيبعته ويمسح النص بعد الإرسال.
+const BRIDGE_HEARTBEAT_DOC = 'bridgeStatus/main';
+const BRIDGE_STALE_MS = 90 * 1000;
+const BRIDGE_WAIT_MS = 15 * 1000;
+const GLOBAL_MAX_PER_HOUR = Number(env('OTP_GLOBAL_MAX_PER_HOUR') || 30);
+
+function transport() {
+  const t = env('OTP_TRANSPORT').toLowerCase();
+  if (t === 'bridge' || t === 'cloud') return t;
+  return env('WHATSAPP_ACCESS_TOKEN') && env('WHATSAPP_PHONE_NUMBER_ID') ? 'cloud' : 'bridge';
+}
+
+async function bridgeIsUp() {
+  try {
+    const snap = await db().doc(BRIDGE_HEARTBEAT_DOC).get();
+    const d = snap.exists ? snap.data() || {} : {};
+    return d.ready === true && Date.now() - ms(d.at) < BRIDGE_STALE_MS;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** حد أقصى عام للأكواد في الساعة (حماية رقم البوت من الحظر) */
+async function reserveGlobalSlot() {
+  const key = new Date().toISOString().slice(0, 13); // YYYY-MM-DDTHH
+  const ref = db().collection('whatsappOtpStats').doc(key);
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const n = snap.exists ? Number(snap.data().count || 0) : 0;
+    if (n >= GLOBAL_MAX_PER_HOUR) return false;
+    tx.set(ref, { count: n + 1, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return true;
+  });
+}
+
+async function sendViaBridge(waNumber, code, minutes) {
+  if (!(await bridgeIsUp())) {
+    throw httpError('unavailable', 'خدمة واتساب مش متاحة دلوقتي. جرّب كمان شوية، ولو المشكلة مستمرة كلم الدعم.');
+  }
+  if (!(await reserveGlobalSlot())) {
+    throw httpError('resource-exhausted', 'ضغط كبير على إرسال الأكواد دلوقتي. جرّب بعد شوية.');
+  }
+  const text = `كود التحقق الخاص بك على منصة فهمت هو: ${code}\nصالح لمدة ${minutes} دقائق، ولا تشاركه مع أي شخص.`;
+  const ref = db().collection('whatsappOutbox').doc();
+  await ref.set({
+    waId: waNumber,
+    text,
+    kind: 'otp',
+    status: 'pending',
+    channel: 'web',
+    createdAt: admin.firestore.Timestamp.now(),
+  });
+  const deadline = Date.now() + BRIDGE_WAIT_MS;
+  let last = 'pending';
+  let error = '';
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 700));
+    const d = (await ref.get()).data() || {};
+    last = d.status || 'pending';
+    error = d.error || '';
+    if (last === 'sent' || last === 'failed') break;
+  }
+  if (last === 'sent') return { via: 'bridge', messageId: ref.id };
+  // لو لسه pending نلغيه عشان ما يتبعتش متأخر بعد ما نكون رجّعنا خطأ
+  if (last === 'pending') {
+    await db().runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists && snap.data().status === 'pending') tx.set(ref, { status: 'cancelled', text: '[cancelled]' }, { merge: true });
+    }).catch(() => {});
+  }
+  if (error === 'not_on_whatsapp') {
+    throw httpError('failed-precondition', 'الرقم ده مش عليه واتساب. تأكد من الرقم.');
+  }
+  throw httpError('unavailable', 'مقدرناش نبعت الكود على واتساب دلوقتي. جرّب بعد شوية.');
+}
+
 async function deliver(waNumber, code) {
   const minutes = Math.round(ttlMs() / 60000);
+  if (transport() === 'bridge') return sendViaBridge(waNumber, code, minutes);
   try {
     return await sendViaTemplate(waNumber, code);
   } catch (e) {
@@ -302,6 +380,8 @@ function otpConfig() {
     templateName: env('WHATSAPP_OTP_TEMPLATE_NAME') || 'fahemt_otp',
     templateLang: env('WHATSAPP_OTP_TEMPLATE_LANG') || 'ar',
     templateMode: (env('WHATSAPP_OTP_TEMPLATE_MODE') || 'auth').toLowerCase(),
+    transport: transport(),
+    globalMaxPerHour: GLOBAL_MAX_PER_HOUR,
     ttlMinutes: Math.round(ttlMs() / 60000),
     maxAttempts: MAX_ATTEMPTS,
     maxSendsPerHour: MAX_SENDS_PER_HOUR,
