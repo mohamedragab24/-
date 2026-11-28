@@ -167,6 +167,17 @@ export default function CampaignsTab() {
               <p className="text-[11px] text-muted-foreground leading-5">
                 بنشيل المسافات والرموز، والصفر الأول بيتبدل بكود الدولة الافتراضي، والأرقام اللي بتبدأ بـ + أو 00 بتفضل بكودها. بنشيل المكرر وغير الصالح (الأرقام المصرية لازم موبايل). ملفات PDF الممسوحة كصورة أو بخطوط مشفرة ممكن ما يطلعش منها أرقام، ساعتها الصقها يدويًا. اضغط «احسب عدد المستلمين» وراجع الصالح والمرفوض قبل الحفظ.
               </p>
+              {preview?.optedOutList?.length > 0 && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs font-bold space-y-1">
+                  <div>الأرقام دي في قائمة الإيقاف (كتبوا «إيقاف» قبل كده) ومش هتتبعتلهم:</div>
+                  <div className="font-mono" dir="ltr">{preview.optedOutList.map((w: string) => "+" + w).join("  ")}</div>
+                  <Button type="button" size="sm" variant="outline" disabled={busy === "unopt"} onClick={() => run("unopt", async () => {
+                    await fn("removeFromWhatsappOptOut")({ waIds: preview.optedOutList });
+                    toast({ title: "اتشالت من قائمة الإيقاف", description: "اضغط «احسب عدد المستلمين» تاني." });
+                    setPreview(null);
+                  })}>إزالة من قائمة الإيقاف (لو دي أرقام تجربة أو الشخص طلب يرجع)</Button>
+                </div>
+              )}
               {preview?.rejected?.length > 0 && (
                 <details className="text-xs">
                   <summary className="cursor-pointer font-bold">المرفوض ({preview.invalid})</summary>
@@ -210,7 +221,7 @@ export default function CampaignsTab() {
                 <Badge className={c.status === "running" ? "bg-emerald-600" : c.status === "paused" ? "bg-amber-600" : ""}>{ST_LABEL[c.status] || c.status}</Badge>
               </div>
               <div className="text-sm font-bold">
-                اتبعت {c.sent || 0} من {c.total || 0} · فشل {c.failed || 0} · اتخطى {c.skipped || 0}
+                اتبعت {c.sent || 0} من {c.total || 0} · فشل {c.failed || 0} · اتخطى {c.skipped || 0}{c.skippedOptOut || c.skippedNoWa ? ` (${c.skippedOptOut || 0} إيقاف، ${c.skippedNoWa || 0} مش على واتساب)` : ""}
                 {c.pausedReason ? ` · ${REASON[c.pausedReason] || c.pausedReason}` : ""}
               </div>
               <div className="text-xs text-muted-foreground whitespace-pre-wrap line-clamp-3">{c.text}</div>
