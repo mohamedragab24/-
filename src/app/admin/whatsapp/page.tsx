@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
+import CampaignsTab from "./campaigns-tab";
 import {
   MessageCircle, Send, Search, Bot, UserRound, Loader2, Copy, CheckCircle2,
   Phone, Clock, Settings2, BookOpen, RefreshCw, ExternalLink, Plus, Trash2, ShieldAlert,
@@ -302,6 +303,7 @@ export default function AdminWhatsApp() {
         <TabsList className="rounded-xl">
           <TabsTrigger value="chats" className="gap-2"><MessageCircle size={16} /> المحادثات</TabsTrigger>
           <TabsTrigger value="settings" className="gap-2"><Settings2 size={16} /> إعدادات البوت</TabsTrigger>
+          <TabsTrigger value="campaigns" className="gap-2"><Send size={16} /> الحملات</TabsTrigger>
           <TabsTrigger value="otp" className="gap-2"><ShieldAlert size={16} /> كود التحقق OTP</TabsTrigger>
           <TabsTrigger value="setup" className="gap-2"><BookOpen size={16} /> طريقة الربط</TabsTrigger>
         </TabsList>
@@ -627,6 +629,10 @@ export default function AdminWhatsApp() {
         </TabsContent>
 
         {/* ================= كود التحقق OTP ================= */}
+        <TabsContent value="campaigns" className="mt-4">
+          <CampaignsTab />
+        </TabsContent>
+
         <TabsContent value="otp" className="mt-4 space-y-4">
           <Card className="rounded-2xl">
             <CardHeader><CardTitle className="text-lg font-black">إزاي بيشتغل كود التحقق</CardTitle></CardHeader>
