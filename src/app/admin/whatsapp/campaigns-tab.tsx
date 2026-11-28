@@ -28,6 +28,68 @@ const AUD_LABEL: Record<string, string> = { mufhem: "المفهمين", mustafhe
 const ST_LABEL: Record<string, string> = { draft: "مسودة", running: "شغالة", paused: "موقوفة مؤقتًا", stopped: "متوقفة", done: "خلصت" };
 const REASON: Record<string, string> = { manual: "إيقاف يدوي", daily_cap: "وصلت للحد اليومي", errors: "إيقاف تلقائي بسبب أخطاء متكررة" };
 
+const REASON_AR: Record<string, string> = {
+  opted_out: "كتب «إيقاف»", not_on_whatsapp: "مش على واتساب", image_unavailable: "الصورة مش متاحة", expired: "انتهت المهلة",
+};
+
+/** تفاصيل الحملة: قوائم الأرقام مع نسخ وتصدير */
+function CampaignDetails({ id }: { id: string }) {
+  const { toast } = useToast();
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState<"sent" | "failed" | "pending" | "skipped">("sent");
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r: any = await httpsCallable(getFunctions(), "listCampaignRecipients")({ id });
+      setData(r.data);
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "تعذر تحميل القوائم", description: e?.message || "" });
+    } finally { setLoading(false); }
+  };
+  const TABS: [typeof tab, string][] = [["sent", "اتبعتلهم"], ["failed", "فشلوا"], ["pending", "لسه"], ["skipped", "اتخطوا"]];
+  const rows: any[] = data ? data[tab] || [] : [];
+  const reasonOf = (r: any) => (r.reason ? REASON_AR[r.reason] || r.reason : "");
+  const lines = rows.map((r) => "+" + r.waId + (reasonOf(r) ? "," + reasonOf(r) : ""));
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(rows.map((r) => "+" + r.waId).join("\n")); toast({ title: `اتنسخ ${rows.length} رقم` }); }
+    catch { toast({ variant: "destructive", title: "تعذر النسخ" }); }
+  };
+  const download = () => {
+    const blob = new Blob(["\ufeffnumber,reason\n" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `campaign-${id}-${tab}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  return (
+    <div className="rounded-lg border bg-muted/30 p-2 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" variant="outline" onClick={load} disabled={loading}>{loading ? "جارٍ التحميل..." : data ? "تحديث" : "عرض القوائم"}</Button>
+        {data && TABS.map(([k, label]) => (
+          <Button key={k} type="button" size="sm" variant={tab === k ? "default" : "ghost"} onClick={() => setTab(k)}>{label} ({(data[k] || []).length})</Button>
+        ))}
+      </div>
+      {data && (
+        <>
+          <div className="flex gap-2">
+            <Button type="button" size="sm" variant="outline" disabled={!rows.length} onClick={copy}>نسخ الأرقام</Button>
+            <Button type="button" size="sm" variant="outline" disabled={!rows.length} onClick={download}>تنزيل CSV</Button>
+          </div>
+          {rows.length === 0 ? <p className="text-xs text-muted-foreground font-bold">مفيش أرقام في القائمة دي.</p> : (
+            <ul className="max-h-56 overflow-auto text-xs space-y-1" dir="ltr">
+              {rows.map((r, i) => (
+                <li key={i} className="font-mono">+{r.waId}{r.name ? ` (${r.name})` : ""}{reasonOf(r) && <span className="font-sans text-red-600" dir="rtl"> — {reasonOf(r)}</span>}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function CampaignsTab() {
   const { firestore } = useFirebase();
   const { toast } = useToast();
@@ -225,6 +287,7 @@ export default function CampaignsTab() {
                 {c.pausedReason ? ` · ${REASON[c.pausedReason] || c.pausedReason}` : ""}
               </div>
               <div className="text-xs text-muted-foreground whitespace-pre-wrap line-clamp-3">{c.text}</div>
+              <CampaignDetails id={c.id} />
               <div className="flex flex-wrap gap-2">
                 {["draft", "paused"].includes(c.status) && (
                   <Button size="sm" variant="outline" disabled={!testPhone || busy === "test" + c.id} onClick={() => test(c.id)} className="gap-1">
