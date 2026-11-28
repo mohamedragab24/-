@@ -83,6 +83,8 @@ function repliesToMessages(replies) {
   for (const reply of replies || []) {
     if (reply.type === 'text') {
       out.push({ text: String(reply.body || '') });
+    } else if (reply.type === 'image') {
+      out.push({ text: String(reply.caption || ''), imageUrl: String(reply.url || '') });
     } else if (reply.type === 'list') {
       const lines = [reply.body || ''];
       const rows = Array.isArray(reply.rows) ? reply.rows : [];
@@ -103,7 +105,7 @@ function repliesToMessages(replies) {
       out.push({ text: tidy(lines) });
     }
   }
-  return out.filter((m) => m.text.trim());
+  return out.filter((m) => m.text.trim() || m.imageUrl);
 }
 
 /** لو العميل كتب رقم من القائمة، نحوّله لاختيار */
