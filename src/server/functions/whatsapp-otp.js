@@ -442,3 +442,6 @@ module.exports.sendWhatsappOtpTest = onCall(async (request) => {
   if (!isAdmin) throw new HttpsError('permission-denied', 'الأدمن فقط');
   return sendTestOtp(request);
 });
+
+// حملات واتساب (ملف منفصل)
+Object.assign(module.exports, require('./whatsapp-campaigns'));
