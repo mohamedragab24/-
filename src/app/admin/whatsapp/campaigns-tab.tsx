@@ -113,10 +113,11 @@ export default function CampaignsTab() {
   const [manCc, setManCc] = useState("20");
   const [manNum, setManNum] = useState("");
   const addManual = () => {
-    const local = manNum.replace(/\D/g, "").replace(/^0+/, "");
-    if (local.length < 6) return toast({ variant: "destructive", title: "اكتب الرقم المحلي" });
+    const asciiNum = manNum.replace(/[\u0660-\u0669]/g, (c) => String(c.charCodeAt(0) - 0x660)).replace(/[\u06F0-\u06F9]/g, (c) => String(c.charCodeAt(0) - 0x6F0));
+    const local = asciiNum.replace(/\D/g, "").replace(/^0+/, "");
+    if (local.length < 6) return toast({ variant: "destructive", title: "الرقم قصير", description: "اكتب الرقم كامل، مثال 01012345678" });
     // لو كتب الرقم بكود الدولة بالفعل (مثلا 201012345678) منكررش الكود
-    const full = manNum.trim().startsWith("+") || manNum.trim().startsWith("00") ? manNum.trim() : local.startsWith(manCc) && local.length > 10 ? "+" + local : "+" + manCc + local;
+    const full = asciiNum.trim().startsWith("+") || asciiNum.trim().startsWith("00") ? asciiNum.trim() : local.startsWith(manCc) && local.length > 10 ? "+" + local : "+" + manCc + local;
     setNumbersText((old) => (old ? old + "\n" : "") + full);
     setManNum(""); setPreview(null);
   };
@@ -164,6 +165,19 @@ export default function CampaignsTab() {
     await fn("testWhatsappCampaign")({ id, phone: testPhone });
     toast({ title: "اتبعتت التجربة", description: "افتح واتساب على الرقم وتأكد إنها وصلت وشكلها تمام." });
   });
+
+  const [editId, setEditId] = useState("");
+  const [ed, setEd] = useState<any>({});
+  const startEdit = (c: any) => { setEditId(c.id); setEd({ name: c.name || "", text: c.text || "", link: c.link || "", imageUrl: c.imageUrl || "", dailyCap: c.dailyCap || 100 }); };
+  const saveEdit = (id: string) => run("edit" + id, async () => {
+    await fn("updateWhatsappCampaign")({ id, ...ed, dailyCap: Number(ed.dailyCap) });
+    toast({ title: "اتحفظ التعديل", description: "لازم تبعت تجربة تاني قبل ما تبدأ." });
+    setEditId("");
+  });
+  const del = (c: any) => {
+    if (!window.confirm(`حذف الحملة «${c.name}» نهائيًا؟`)) return;
+    run("del" + c.id, async () => { await fn("deleteWhatsappCampaign")({ id: c.id }); toast({ title: "اتحذفت الحملة" }); });
+  };
 
   const act = (id: string, action: string) => run(action + id, async () => {
     await fn("setWhatsappCampaignStatus")({ id, action });
@@ -251,7 +265,7 @@ export default function CampaignsTab() {
             </div>
           )}
           <Textarea placeholder="نص الرسالة (بحد أقصى ٩٠٠ حرف). هيتضاف اسم المستلم تلقائيًا في الأول." value={text} onChange={(e) => setText(e.target.value)} rows={5} maxLength={900} />
-          <Input dir="ltr" placeholder="اللينك (اختياري) https://..." value={link} onChange={(e) => setLink(e.target.value)} />
+          <Input dir="ltr" placeholder="اللينك (اختياري) مثال fahemt.online" value={link} onChange={(e) => setLink(e.target.value)} onBlur={() => { const v = link.trim(); if (v && !/^[a-z][a-z0-9+.-]*:/i.test(v)) setLink("https://" + v.replace(/^\/\//, "")); }} />
           <div className="flex flex-wrap items-center gap-3">
             <label className="inline-flex items-center gap-2 cursor-pointer rounded-md border px-3 h-10 text-sm font-bold">
               <ImagePlus size={16} /> {imageUrl ? "تغيير الصورة" : "إضافة صورة"}
@@ -306,6 +320,27 @@ export default function CampaignsTab() {
                   <Button size="sm" variant="destructive" onClick={() => act(c.id, "stop")} className="gap-1"><Square size={14} /> إلغاء نهائي</Button>
                 )}
               </div>
+              <div className="flex flex-wrap gap-2">
+                {["draft", "paused", "stopped"].includes(c.status) && <Button size="sm" variant="outline" onClick={() => (editId === c.id ? setEditId("") : startEdit(c))}>{editId === c.id ? "إلغاء التعديل" : "تعديل"}</Button>}
+                {c.status !== "running" && <Button size="sm" variant="destructive" disabled={busy === "del" + c.id} onClick={() => del(c)}>حذف</Button>}
+              </div>
+              {editId === c.id && (
+                <div className="rounded-lg border bg-muted/30 p-2 space-y-2">
+                  <Input value={ed.name} onChange={(e) => setEd({ ...ed, name: e.target.value })} placeholder="اسم الحملة" />
+                  <Textarea rows={4} maxLength={900} value={ed.text} onChange={(e) => setEd({ ...ed, text: e.target.value })} placeholder="نص الرسالة" />
+                  <Input dir="ltr" value={ed.link} onChange={(e) => setEd({ ...ed, link: e.target.value })} placeholder="اللينك (اختياري)" />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex items-center gap-2 cursor-pointer rounded-md border px-3 h-9 text-xs font-bold bg-white">
+                      <ImagePlus size={14} /> {ed.imageUrl ? "تغيير الصورة" : "إضافة صورة"}
+                      <input type="file" accept="image/*" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (!f) return; try { const u = await uploadWaImage(f); setEd((o: any) => ({ ...o, imageUrl: u })); } catch (er: any) { toast({ variant: "destructive", title: "فشل رفع الصورة", description: er?.message || "" }); } }} />
+                    </label>
+                    {ed.imageUrl && <img src={ed.imageUrl} alt="" className="h-12 rounded border" />}
+                    {ed.imageUrl && <Button type="button" size="sm" variant="ghost" onClick={() => setEd({ ...ed, imageUrl: "" })}>إزالة الصورة</Button>}
+                    <label className="flex items-center gap-2 text-xs font-bold">الحد اليومي <Input type="number" min={10} max={300} value={ed.dailyCap} onChange={(e) => setEd({ ...ed, dailyCap: e.target.value })} className="w-20 h-9" /></label>
+                  </div>
+                  <Button size="sm" disabled={busy === "edit" + c.id} onClick={() => saveEdit(c.id)}>حفظ التعديل</Button>
+                </div>
+              )}
               {["draft", "paused"].includes(c.status) && !c.testSentAt && <p className="text-xs font-bold text-amber-700">لازم تبعت تجربة لرقمك قبل ما تبدأ.</p>}
             </div>
           ))}
