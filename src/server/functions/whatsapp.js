@@ -129,6 +129,7 @@ const cloudIO = {
   text: (to, body) => sendText(to, body),
   list: (to, payload) => sendList(to, payload),
   buttons: (to, payload) => sendButtons(to, payload),
+  image: (to, url, caption) => sendText(to, [caption, url].filter(Boolean).join('\n')),
   markRead: (id) => markRead(id),
 };
 
@@ -139,6 +140,7 @@ function collectorIO() {
     async text(to, body) { out.push({ type: 'text', body }); },
     async list(to, payload) { out.push({ type: 'list', ...payload }); },
     async buttons(to, payload) { out.push({ type: 'buttons', ...payload }); },
+    async image(to, url, caption) { out.push({ type: 'image', url, caption: String(caption || '') }); },
     async markRead() {},
   };
 }
@@ -209,12 +211,15 @@ async function loadBotSettings() {
       extraFaqs: Array.isArray(data.faqs)
         ? data.faqs.filter((f) => f && f.question && (faqAnswers(f).length > 0))
         : [],
+      menuItems: Array.isArray(data.menuItems)
+        ? data.menuItems.filter((m) => m && m.id && m.title && m.enabled !== false).slice(0, 10)
+        : [],
       handoffKeywords: Array.isArray(data.handoffKeywords) && data.handoffKeywords.length ? data.handoffKeywords : [],
       businessHours: data.businessHours || '٩ صباحاً - ١٠ مساءً',
     };
   } catch (e) {
     console.warn('whatsapp settings load failed', e?.message);
-    return { enabled: true, texts: DEFAULT_TEXT, extraFaqs: [], handoffKeywords: [], businessHours: '٩ صباحاً - ١٠ مساءً' };
+    return { enabled: true, texts: DEFAULT_TEXT, extraFaqs: [], menuItems: [], handoffKeywords: [], businessHours: '٩ صباحاً - ١٠ مساءً' };
   }
 }
 
@@ -281,14 +286,31 @@ async function notifyAdminsHandoff({ waId, name, lastText, userUid }) {
   }
 }
 
-function menuPayload(texts, name) {
+/** صفوف القائمة: اللي ظبطه الأدمن، أو الافتراضي */
+function menuRowsOf(settings) {
+  const items = settings && Array.isArray(settings.menuItems) ? settings.menuItems : [];
+  if (!items.length) return MENU_ROWS;
+  return items.map((m) => ({
+    id: String(m.id),
+    title: String(m.title).slice(0, 24),
+    description: String(m.description || '').slice(0, 72),
+  }));
+}
+
+/** يبعت رد البوت نص أو صورة بكابشن */
+async function sendBotReply(io, waId, body, imageUrl) {
+  if (imageUrl && typeof io.image === 'function') return io.image(waId, imageUrl, body);
+  return io.text(waId, body);
+}
+
+function menuPayload(texts, name, rows) {
   const hello = name ? `أهلاً ${name} 👋` : 'أهلاً بيك 👋';
   return {
     header: 'فهمت — المساعد الآلي',
     body: `${hello}\n${texts.welcome.replace(/^أهلاً بيك في فهمت 👋\n?/, '')}`.slice(0, 1024),
     footer: 'اكتب «موظف» في أي وقت للتحويل للدعم',
     button: 'اختار',
-    rows: MENU_ROWS,
+    rows: rows && rows.length ? rows : MENU_ROWS,
   };
 }
 
@@ -366,7 +388,7 @@ async function runBot({ waId, text, name, settings, conversation, io = cloudIO }
   const faqMatch = matchFaq(text, settings.extraFaqs);
   if (faqMatch) {
     const body = pickOne(faqMatch.answers);
-    await io.text(waId, body);
+    await sendBotReply(io, waId, body, faqMatch.faq.imageUrl || '');
     await upsertConversation(waId, {
       lastOutboundAt: now(), lastMessage: body, lastMessageAt: now(), lastIntent: 'faq', unread: 0,
     });
@@ -395,12 +417,15 @@ async function runBot({ waId, text, name, settings, conversation, io = cloudIO }
 async function runMenuChoice({ waId, choiceId, settings, conversation, name, io = cloudIO }) {
   if (choiceId === 'human') return runBot({ waId, text: 'موظف', name, settings, conversation, io });
   if (choiceId === 'menu') {
-    await io.list(waId, menuPayload(settings.texts, name));
+    await io.list(waId, menuPayload(settings.texts, name, menuRowsOf(settings)));
     await upsertConversation(waId, { lastOutboundAt: now(), lastMessage: 'القائمة الرئيسية', lastMessageAt: now() });
     return { intent: 'menu' };
   }
-  const reply = await replyFor({ intent: choiceId, texts: settings.texts, extraFaqs: settings.extraFaqs });
-  await io.text(waId, reply.body);
+  const customItem = (settings.menuItems || []).find((m) => String(m.id) === String(choiceId) && (String(m.answer || '').trim() || m.imageUrl));
+  const reply = customItem
+    ? { kind: 'text', body: String(customItem.answer || '').trim() || String(customItem.title) }
+    : await replyFor({ intent: choiceId, texts: settings.texts, extraFaqs: settings.extraFaqs });
+  await sendBotReply(io, waId, reply.body, customItem?.imageUrl || '');
   await upsertConversation(waId, {
     lastOutboundAt: now(), lastMessage: reply.body, lastMessageAt: now(), lastIntent: choiceId, unread: 0,
   });
@@ -515,7 +540,7 @@ async function handleMessage({ m, contactName, metadata, io = cloudIO, channel =
   const isFirst = !conversation;
   if (isFirst && inbound.kind === 'text' && !detectIntent(inbound.text)) {
     const name = platformUser?.name || contactName || '';
-    await io.list(waId, menuPayload(settings.texts, name));
+    await io.list(waId, menuPayload(settings.texts, name, menuRowsOf(settings)));
     await upsertConversation(waId, { lastOutboundAt: now(), lastMessage: 'القائمة الرئيسية', lastMessageAt: now() });
     return { stored: true, intent: 'menu' };
   }
@@ -569,9 +594,10 @@ async function handleWebhook(body) {
 }
 
 /** رد الأدمن من لوحة التحكم (داخل نافذة 24 ساعة) */
-async function sendAdminReply({ waId, text, actor }) {
+async function sendAdminReply({ waId, text, imageUrl, actor }) {
   const phone = normalizePhone(waId);
-  if (!phone || !String(text || '').trim()) {
+  const img = typeof imageUrl === 'string' && /^https?:\/\//.test(imageUrl) ? imageUrl : '';
+  if (!phone || (!String(text || '').trim() && !img)) {
     const e = new Error('رقم أو نص غير صالح');
     e.code = 'invalid-argument';
     throw e;
@@ -582,7 +608,7 @@ async function sendAdminReply({ waId, text, actor }) {
     e.code = 'not-found';
     throw e;
   }
-  const body = String(text).slice(0, 4096);
+  const body = String(text || '').slice(0, 4096);
 
   // محادثات الواتساب غير الرسمي (bridge): الإرسال من الخدمة نفسها عبر outbox
   if (conversation.channel === 'web') {
@@ -590,6 +616,7 @@ async function sendAdminReply({ waId, text, actor }) {
     await outRef.set({
       waId: phone,
       text: body,
+      imageUrl: img,
       by: actor?.fullName || actor?.email || actor?.uid || '',
       actorUid: actor?.uid || null,
       status: 'pending',
@@ -597,7 +624,7 @@ async function sendAdminReply({ waId, text, actor }) {
       createdAt: now(),
     });
     await logMessage(phone, `out_${outRef.id}`, {
-      direction: 'out', type: 'text', text: body, by: 'human',
+      direction: 'out', type: img ? 'image' : 'text', text: body, imageUrl: img, by: 'human',
       actorUid: actor?.uid || null, actorName: actor?.fullName || actor?.email || '', status: 'queued',
     });
     await upsertConversation(phone, {
@@ -615,7 +642,7 @@ async function sendAdminReply({ waId, text, actor }) {
     throw e;
   }
 
-  const res = await sendText(phone, body);
+  const res = await sendText(phone, img ? [body, img].filter(Boolean).join('\n') : body);
   const waMessageId = res?.messages?.[0]?.id || `out_${Date.now()}`;
 
   await logMessage(phone, String(waMessageId), {
