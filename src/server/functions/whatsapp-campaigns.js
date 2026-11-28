@@ -132,6 +132,7 @@ module.exports.previewCampaignAudience = onCall(async (request) => {
       count: ok.length, total: list.length, optedOut: list.length - ok.length,
       withoutPhone: 0, invalid: rejected.length, duplicates,
       rejected: rejected.slice(0, 40), sample: ok.slice(0, 5).map((r) => r.waId.replace(/\d{4}$/, '****')),
+      optedOutList: list.filter((r) => opt.has(r.waId)).slice(0, 40).map((r) => r.waId),
     };
   }
   const { list, withoutPhone, invalid } = await collectAudience(String(d.audience || 'all'), d.verifiedOnly === true);
@@ -139,6 +140,15 @@ module.exports.previewCampaignAudience = onCall(async (request) => {
   const opt = new Set(optSnap.docs.map((x) => x.id));
   const afterOptOut = list.filter((r) => !opt.has(r.waId)).length;
   return { count: afterOptOut, total: list.length, optedOut: list.length - afterOptOut, withoutPhone, invalid };
+});
+
+/** يشيل أرقام من قائمة الإيقاف (قرار الأدمن، لو الشخص طلب يرجع يستقبل أو ده رقم تجربة) */
+module.exports.removeFromWhatsappOptOut = onCall(async (request) => {
+  await requireAdmin(request);
+  const ids = (Array.isArray(request.data?.waIds) ? request.data.waIds : []).map((x) => String(x || '').replace(/\D/g, '')).filter((x) => x.length >= 10 && x.length <= 15).slice(0, 40);
+  if (!ids.length) throw new HttpsError('invalid-argument', 'مفيش أرقام');
+  for (const id of ids) await db().collection('whatsappOptOut').doc(id).delete();
+  return { ok: true, removed: ids.length };
 });
 
 module.exports.createWhatsappCampaign = onCall(async (request) => {
@@ -152,13 +162,20 @@ module.exports.createWhatsappCampaign = onCall(async (request) => {
   if (!text) throw new HttpsError('invalid-argument', 'اكتب نص الرسالة');
   if (d.link && !link) throw new HttpsError('invalid-argument', 'اللينك غير صحيح');
   const audience = String(d.audience || 'all');
+  const parsed = audience === 'custom' ? parseNumbers(d.numbersText, d.defaultCc) : { rejected: [] };
   const { list } = audience === 'custom'
-    ? parseNumbers(d.numbersText, d.defaultCc)
+    ? parsed
     : await collectAudience(audience, d.verifiedOnly === true);
   const optSnap = await db().collection('whatsappOptOut').get();
   const opt = new Set(optSnap.docs.map((x) => x.id));
   const recipients = list.filter((r) => !opt.has(r.waId));
-  if (!recipients.length) throw new HttpsError('failed-precondition', 'مفيش مستلمين في الشريحة دي');
+  if (!recipients.length) {
+    if (audience === 'custom') {
+      if (!list.length) throw new HttpsError('failed-precondition', `مفيش أرقام صالحة (${parsed.rejected.length} مرفوض). اكتب الرقم بكود الدولة أو اضغط «+ إضافة رقم».`);
+      throw new HttpsError('failed-precondition', `كل الأرقام (${list.length}) في قائمة الإيقاف (كتبوا «إيقاف» قبل كده)، فمش هتتبعتلهم. تقدر تشيلهم من القائمة من زرار «إزالة من قائمة الإيقاف» بعد «احسب عدد المستلمين».`);
+    }
+    throw new HttpsError('failed-precondition', 'مفيش مستلمين في الشريحة دي');
+  }
   if (recipients.length > MAX_RECIPIENTS) throw new HttpsError('failed-precondition', `الحد الأقصى ${MAX_RECIPIENTS} مستلم في الحملة الواحدة`);
 
   const dailyCap = Math.min(300, Math.max(10, Number(d.dailyCap) || 100));
