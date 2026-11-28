@@ -33,13 +33,13 @@ const http = require('http');
 const admin = require('firebase-admin');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
-const {
-  default: makeWASocket,
-  useMultiFileAuthState,
-  makeCacheableSignalKeyStore,
-  fetchLatestBaileysVersion,
-  DisconnectReason,
-} = require('@whiskeysockets/baileys');
+// Baileys v7 ESM فقط: بنحمّله بـ import() ديناميكي قبل التشغيل
+let makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, DisconnectReason;
+async function loadBaileys() {
+  const b = await import('@whiskeysockets/baileys');
+  makeWASocket = b.default || b.makeWASocket;
+  ({ useMultiFileAuthState, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, DisconnectReason } = b);
+}
 const map = require('./lib/map');
 
 const PLATFORM_URL = (process.env.PLATFORM_URL || 'https://www.fahemt.online').replace(/\/+$/, '');
@@ -52,7 +52,7 @@ const PAIR_PHONE = String(process.env.PAIR_PHONE || '').replace(/[^\d]/g, '');
 const AUTH_BACKUP = String(process.env.AUTH_BACKUP || 'on') !== 'off';
 const OUTBOX_MAX_AGE_MS = 15 * 60 * 1000;
 const OTP_MAX_AGE_MS = 60 * 1000; // الكود القديم ما يتبعتش
-const AUTH_DOC = 'whatsapp';
+const AUTH_DOC = 'whatsapp-v7'; // مستند جديد لجلسة Baileys v7 (الجلسة القديمة v6 مش متوافقة)
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
@@ -439,6 +439,7 @@ http
   if (!BRIDGE_SECRET) log('تحذير: BRIDGE_SECRET غير موجود — المنصة هترفض كل الطلبات');
   if (!db) log('تحذير: ردود الأدمن من اللوحة مش هتوصل (Firebase مش متظبط)');
   if (!PAIR_PHONE) log('ملاحظة: PAIR_PHONE مش متظبط — الربط هيبقى بـ QR في اللوج');
+  await loadBaileys();
   await restoreAuth();
   watchOutbox();
   await start();
