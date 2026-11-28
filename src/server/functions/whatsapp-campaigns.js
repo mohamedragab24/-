@@ -12,6 +12,56 @@ const { onCall, HttpsError } = require('./shim').https;
 
 const db = () => admin.firestore();
 const MAX_RECIPIENTS = 2000;
+const MAX_RAW_CHARS = 400000;
+
+/** يطلّع الأرقام المحتملة من نص حر (لصق أو ملف): سطر سطر، وبفواصل , ; | tab */
+function extractCandidates(text) {
+  const out = [];
+  const lines = String(text || '').slice(0, MAX_RAW_CHARS).split(/\r?\n/);
+  for (const line of lines) {
+    for (const piece of line.split(/[,;|\t]+/)) {
+      const m = piece.match(/\+?\(?\d[\d\s().\-]{5,}\d/g);
+      if (m) for (const x of m) out.push(x.trim());
+    }
+  }
+  return out;
+}
+
+/**
+ * يضبط رقم واحد على صيغة دولية بدون +.
+ * القواعد: يشيل المسافات والرموز، 00 = +، الصفر الأول = رقم محلي ويتبدل بكود الدولة الافتراضي،
+ * الرقم المصري من غير صفر (10 أرقام تبدأ بـ 1) يتكمل بـ 20. الأرقام المصرية لازم تكون موبايل (10/11/12/15).
+ */
+function normalizeNumber(raw, defaultCc) {
+  const cc = String(defaultCc || '20').replace(/\D/g, '') || '20';
+  let plus = String(raw || '').trim().startsWith('+');
+  let d = String(raw || '').replace(/\D/g, '');
+  if (!d) return { error: 'فاضي' };
+  if (d.startsWith('00')) { d = d.slice(2); plus = true; }
+  if (!plus) {
+    if (d.startsWith('0')) d = cc + d.replace(/^0+/, '');
+    else if (cc === '20' && d.length === 10 && d.startsWith('1')) d = '20' + d;
+  }
+  if (d.length < 10) return { error: 'قصير أوي' };
+  if (d.length > 15) return { error: 'طويل أوي' };
+  if (d.startsWith('20') && !/^20(10|11|12|15)\d{8}$/.test(d)) return { error: 'رقم مصري غير صالح (لازم موبايل 010/011/012/015)' };
+  return { wa: d };
+}
+
+/** يحلل نص الأرقام: صالح (فريد) + مرفوض + مكرر */
+function parseNumbers(text, defaultCc) {
+  const valid = new Map();
+  const rejected = [];
+  let duplicates = 0;
+  for (const raw of extractCandidates(text)) {
+    const r = normalizeNumber(raw, defaultCc);
+    if (r.error) { rejected.push({ raw: raw.slice(0, 40), reason: r.error }); continue; }
+    if (valid.has(r.wa)) { duplicates++; continue; }
+    valid.set(r.wa, { waId: r.wa, name: '', uid: null });
+  }
+  return { list: [...valid.values()], rejected, duplicates };
+}
+
 const AUDIENCES = { mufhem: ['mufhem'], mustafhem: ['mustafhem'], all: ['mufhem', 'mustafhem'] };
 const OPT_OUT_LINE = 'لإيقاف الرسائل الدعائية ارسل: إيقاف';
 
@@ -73,6 +123,17 @@ function cleanUrl(u) {
 module.exports.previewCampaignAudience = onCall(async (request) => {
   await requireAdmin(request);
   const d = request.data || {};
+  if (String(d.audience) === 'custom') {
+    const { list, rejected, duplicates } = parseNumbers(d.numbersText, d.defaultCc);
+    const optSnap = await db().collection('whatsappOptOut').get();
+    const opt = new Set(optSnap.docs.map((x) => x.id));
+    const ok = list.filter((r) => !opt.has(r.waId));
+    return {
+      count: ok.length, total: list.length, optedOut: list.length - ok.length,
+      withoutPhone: 0, invalid: rejected.length, duplicates,
+      rejected: rejected.slice(0, 40), sample: ok.slice(0, 5).map((r) => r.waId.replace(/\d{4}$/, '****')),
+    };
+  }
   const { list, withoutPhone, invalid } = await collectAudience(String(d.audience || 'all'), d.verifiedOnly === true);
   const optSnap = await db().collection('whatsappOptOut').get();
   const opt = new Set(optSnap.docs.map((x) => x.id));
@@ -91,7 +152,9 @@ module.exports.createWhatsappCampaign = onCall(async (request) => {
   if (!text) throw new HttpsError('invalid-argument', 'اكتب نص الرسالة');
   if (d.link && !link) throw new HttpsError('invalid-argument', 'اللينك غير صحيح');
   const audience = String(d.audience || 'all');
-  const { list } = await collectAudience(audience, d.verifiedOnly === true);
+  const { list } = audience === 'custom'
+    ? parseNumbers(d.numbersText, d.defaultCc)
+    : await collectAudience(audience, d.verifiedOnly === true);
   const optSnap = await db().collection('whatsappOptOut').get();
   const opt = new Set(optSnap.docs.map((x) => x.id));
   const recipients = list.filter((r) => !opt.has(r.waId));

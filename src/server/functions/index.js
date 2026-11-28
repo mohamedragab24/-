@@ -231,6 +231,11 @@ exports.createMediaUploadUrl = onCall({ secrets: R2_SECRETS }, async (request) =
     if (!(contentType.startsWith('video/') || contentType.startsWith('image/'))) throw new HttpsError('invalid-argument', 'نوع الملف غير مدعوم');
     if (size > 2 * 1024 * 1024 * 1024) throw new HttpsError('invalid-argument', 'الحد الأقصى للملف 2 جيجا');
     key = `portfolio/${uid}/${stamp}_${safe}`;
+  } else if (kind === 'whatsapp') {
+    if (!(await isAdminRequest(request))) throw new HttpsError('permission-denied', 'للأدمن فقط');
+    if (!contentType.startsWith('image/')) throw new HttpsError('invalid-argument', 'لازم تكون صورة');
+    if (size > 3 * 1024 * 1024) throw new HttpsError('invalid-argument', 'الحد الأقصى للصورة 3 ميجا');
+    key = `whatsapp/${stamp}.jpg`;
   } else if (kind === 'receipt') {
     if (!(await isAdminRequest(request))) throw new HttpsError('permission-denied', 'للأدمن فقط');
     if (!contentType.startsWith('image/') && contentType !== 'application/pdf') throw new HttpsError('invalid-argument', 'الإيصال صورة أو PDF');
