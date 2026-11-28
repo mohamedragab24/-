@@ -151,6 +151,22 @@ module.exports.removeFromWhatsappOptOut = onCall(async (request) => {
   return { ok: true, removed: ids.length };
 });
 
+/** قوائم مستلمي الحملة: اتبعتلهم / فشلوا (بالسبب) / لسه / اتخطوا (أدمن فقط) */
+module.exports.listCampaignRecipients = onCall(async (request) => {
+  await requireAdmin(request);
+  const id = String(request.data?.id || '');
+  if (!id) throw new HttpsError('invalid-argument', 'الحملة غير محددة');
+  const snap = await db().collection('whatsappCampaigns').doc(id).collection('recipients').limit(MAX_RECIPIENTS + 50).get();
+  const out = { sent: [], failed: [], pending: [], skipped: [] };
+  for (const d of snap.docs) {
+    const r = d.data() || {};
+    const at = r.sentAt && typeof r.sentAt.toMillis === 'function' ? r.sentAt.toMillis() : null;
+    const row = { waId: String(r.waId || d.id), name: String(r.name || ''), reason: String(r.error || ''), at };
+    (out[r.status === 'sent' ? 'sent' : r.status === 'failed' ? 'failed' : r.status === 'skipped' ? 'skipped' : 'pending']).push(row);
+  }
+  return out;
+});
+
 module.exports.createWhatsappCampaign = onCall(async (request) => {
   const { uid } = await requireAdmin(request);
   const d = request.data || {};
