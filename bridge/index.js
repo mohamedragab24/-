@@ -338,8 +338,11 @@ async function handleIncoming(m) {
   }
 
   const data = await res.json();
-  const messages = map.repliesToMessages(data?.replies);
+  const messages = map.repliesToMessages(data?.replies).slice(0, 10);
+  let firstItem = true;
   for (const item of messages) {
+    if (!firstItem) await sleep(900 + Math.floor(Math.random() * 900)); // فاصل قصير بين رسايل نفس الرد
+    firstItem = false;
     if (item.rows?.length) lastMenu.set(waId, item.rows);
     if (item.imageUrl && (await imageOk(item.imageUrl))) {
       await sock.sendMessage(jid, { image: { url: item.imageUrl }, caption: String(item.text || '').slice(0, 1000) });
