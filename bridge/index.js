@@ -475,12 +475,14 @@ const IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
 
 // فحص حجم الصورة قبل الإرسال (من غير تحميلها في الذاكرة)
 async function imageOk(url) {
+  // GET بنطاق 0-0 بدل HEAD (الـ Worker بتاع R2 بيرفض HEAD)، ومن غير تحميل الصورة
   try {
-    const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(15000) });
-    if (!r.ok) return false;
-    const len = Number(r.headers.get('content-length') || 0);
+    const r = await fetch(url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(15000) });
     const type = String(r.headers.get('content-type') || '');
-    return type.startsWith('image/') && len > 0 && len <= IMAGE_MAX_BYTES;
+    const cr = String(r.headers.get('content-range') || '');
+    const total = cr.includes('/') ? Number(cr.split('/').pop()) : Number(r.headers.get('content-length') || 0);
+    try { await r.body?.cancel(); } catch (_) {}
+    return (r.status === 200 || r.status === 206) && type.startsWith('image/') && total > 0 && total <= IMAGE_MAX_BYTES;
   } catch (_) { return false; }
 }
 
