@@ -349,8 +349,16 @@ async function processOutbox(ref, data) {
         return;
       }
       await new Promise((r) => setTimeout(r, 800 + Math.floor(Math.random() * 1200)));
-      const sentOtp = await sock.sendMessage(found[0].jid || map.jidFromWaId(waId), { text: String(data.text || '') });
-      log('otp jid', String(found[0].jid || '').replace(/^(\d{6})\d+/, '$1***'), 'id', String(sentOtp?.key?.id || '').slice(0, 8));
+      // الأفضل نبعت على LID لو معروف (مستخدمين كتير محادثتهم مع البوت على LID مش على الرقم)
+      const pnJid = found[0].jid || map.jidFromWaId(waId);
+      let lidJid = found[0].lid ? String(found[0].lid) : '';
+      if (!lidJid) {
+        try { lidJid = (await sock.signalRepository?.lidMapping?.getLIDForPN?.(pnJid)) || ''; } catch (_) {}
+      }
+      if (lidJid && !lidJid.includes('@')) lidJid += '@lid';
+      const targetJid = lidJid || pnJid;
+      const sentOtp = await sock.sendMessage(targetJid, { text: String(data.text || '') });
+      log('otp jid', targetJid.replace(/^(\d{6})\d+/, '$1***'), lidJid ? '(lid)' : '(pn)', 'id', String(sentOtp?.key?.id || '').slice(0, 8));
       await ref.set({ status: 'sent', text: '[otp]', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       log('otp sent ->', waId);
       return;
