@@ -1,39 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { useFirebase } from "@/firebase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { uploadImageWithProgress } from "@/lib/upload-with-progress";
+import { uploadWaImage } from "./wa-upload";
 import { ImagePlus, Trash2, Plus, ArrowUp, ArrowDown } from "lucide-react";
-
-/** تصغير الصورة قبل الرفع (أقصى 1280 بكسل، JPEG) عشان الجسر ميحمّلش صور تقيلة */
-export async function shrinkImage(file: File): Promise<File> {
-  const bmp = await createImageBitmap(file);
-  const scale = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
-  const c = document.createElement("canvas");
-  c.width = Math.round(bmp.width * scale);
-  c.height = Math.round(bmp.height * scale);
-  c.getContext("2d")!.drawImage(bmp, 0, 0, c.width, c.height);
-  const blob: Blob = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("تعذر ضغط الصورة"))), "image/jpeg", 0.8));
-  return new File([blob], "wa.jpg", { type: "image/jpeg" });
-}
 
 /** زرار رفع صورة (بيرجّع الرابط) + معاينة وإزالة */
 export function ImageField({ value, onChange, label = "صورة" }: { value: string; onChange: (url: string) => void; label?: string }) {
-  const { storage } = useFirebase();
   const { toast } = useToast();
-  const [progress, setProgress] = useState<number | null>(null);
+  const [uploading, setUploading] = useState(false);
   const pick = async (file: File) => {
-    if (!storage) return toast({ variant: "destructive", title: "التخزين غير متاح" });
+    setUploading(true);
     try {
-      onChange(await uploadImageWithProgress(storage, "notifications/whatsapp", await shrinkImage(file), setProgress));
+      onChange(await uploadWaImage(file));
     } catch (e: any) {
       toast({ variant: "destructive", title: "فشل رفع الصورة", description: e?.message || "" });
-    } finally { setProgress(null); }
+    } finally { setUploading(false); }
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -41,7 +27,7 @@ export function ImageField({ value, onChange, label = "صورة" }: { value: str
         <ImagePlus size={14} /> {value ? `تغيير ${label}` : `إضافة ${label}`}
         <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) pick(f); e.target.value = ""; }} />
       </label>
-      {progress !== null && <span className="text-xs font-bold">جارٍ الرفع {progress}%</span>}
+      {uploading && <span className="text-xs font-bold">جارٍ الرفع...</span>}
       {value && <img src={value} alt="" className="h-12 rounded border" />}
       {value && <Button type="button" variant="ghost" size="sm" onClick={() => onChange("")}>إزالة</Button>}
     </div>
