@@ -47,11 +47,12 @@ export async function POST(req: NextRequest) {
 
   const waId = String(body?.waId || "").trim();
   const text = String(body?.text || "").trim();
-  if (!waId || !text) return NextResponse.json({ ok: false, error: "invalid-argument" }, { status: 400 });
+  const imageUrl = String(body?.imageUrl || "").trim();
+  if (!waId || (!text && !imageUrl)) return NextResponse.json({ ok: false, error: "invalid-argument" }, { status: 400 });
 
   try {
     const wa = require("../../../../server/functions/whatsapp.js");
-    const out = await wa.sendAdminReply({ waId, text, actor: { uid: auth.uid, fullName: auth.fullName } });
+    const out = await wa.sendAdminReply({ waId, text, imageUrl, actor: { uid: auth.uid, fullName: auth.fullName } });
     return NextResponse.json({ ok: true, ...out });
   } catch (e: any) {
     const code = String(e?.code || "internal");
