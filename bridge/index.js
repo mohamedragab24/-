@@ -223,6 +223,14 @@ async function start() {
       }
     });
 
+    // تتبع حالة التسليم للرسايل الصادرة (1=pending 2=server 3=delivered 4=read)
+    sock.ev.on('messages.update', (updates) => {
+      for (const u of updates || []) {
+        if (u?.key?.fromMe && u?.update?.status !== undefined) {
+          log('ack', String(u.key.id || '').slice(0, 8), 'status', u.update.status, 'to', String(u.key.remoteJid || '').replace(/(\d{4})@/, '****@').slice(-24));
+        }
+      }
+    });
     sock.ev.on('messages.upsert', async (event) => {
       if (event.type !== 'notify') return;
       for (const m of event.messages || []) {
@@ -341,7 +349,8 @@ async function processOutbox(ref, data) {
         return;
       }
       await new Promise((r) => setTimeout(r, 800 + Math.floor(Math.random() * 1200)));
-      await sock.sendMessage(found[0].jid || map.jidFromWaId(waId), { text: String(data.text || '') });
+      const sentOtp = await sock.sendMessage(found[0].jid || map.jidFromWaId(waId), { text: String(data.text || '') });
+      log('otp jid', String(found[0].jid || '').replace(/^(\d{6})\d+/, '$1***'), 'id', String(sentOtp?.key?.id || '').slice(0, 8));
       await ref.set({ status: 'sent', text: '[otp]', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       log('otp sent ->', waId);
       return;
@@ -353,7 +362,8 @@ async function processOutbox(ref, data) {
       log('outbox failed (no valid jid) ->', waId);
       return;
     }
-    await sock.sendMessage(target, { text: String(data.text || '') });
+    const sentOut = await sock.sendMessage(target, { text: String(data.text || '') });
+    log('outbox jid', String(target).replace(/^(\d{6})\d+/, '$1***'), 'id', String(sentOut?.key?.id || '').slice(0, 8));
     await ref.set({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     if (msgRef) await msgRef.set({ status: 'sent' }, { merge: true }).catch(() => {});
     log('outbox sent ->', waId);
