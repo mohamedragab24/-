@@ -224,6 +224,11 @@ async function start() {
     });
 
     // تتبع حالة التسليم للرسايل الصادرة (1=pending 2=server 3=delivered 4=read)
+    sock.ev.on('message-receipt.update', (list) => {
+      for (const r of list || []) {
+        log('receipt', String(r?.key?.id || '').slice(0, 8), 'to', String(r?.key?.remoteJid || '').replace(/^(\d{6})\d+/, '$1***'), JSON.stringify({ d: !!r?.receipt?.receiptTimestamp, r: !!r?.receipt?.readTimestamp, p: !!r?.receipt?.playedTimestamp }));
+      }
+    });
     sock.ev.on('messages.update', (updates) => {
       for (const u of updates || []) {
         if (u?.key?.fromMe && u?.update?.status !== undefined) {
