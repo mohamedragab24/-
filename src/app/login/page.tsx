@@ -95,6 +95,83 @@ function LoginContent() {
   const [otpProof, setOtpProof] = useState<string | null>(null);
   const [otpBusy, setOtpBusy] = useState(false);
   const [otpCountdown, setOtpCountdown] = useState(0);
+  const [otpBridgeDown, setOtpBridgeDown] = useState(false);
+
+  // قراءة سياسة التسجيل من السيرفر (الإعداد مش مقروء للزوار مباشرة من Firestore)
+  useEffect(() => {
+    if (isLogin) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res: any = await httpsCallable(getFunctions(), "getOtpPolicy")({});
+        const d = res?.data || {};
+        if (cancelled) return;
+        setRequireOtp(d.requireOtpOnSignup === true);
+        setOtpBridgeDown(d.requireOtpOnSignup === true && d.bridgeUp === false);
+      } catch (e) {
+        console.warn("getOtpPolicy failed", e);
+        if (!cancelled) setRequireOtp(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isLogin]);
+
+  // أي تغيير في الرقم يلغي التأكيد السابق
+  useEffect(() => {
+    setOtpVerified(false);
+    setOtpProof(null);
+    setOtpSent(false);
+    setOtpCode("");
+  }, [countryCode, phoneNumber]);
+
+  useEffect(() => {
+    if (otpCountdown <= 0) return;
+    const t = setTimeout(() => setOtpCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [otpCountdown]);
+
+  const sendOtpCode = async () => {
+    const v = validatePhone(countryCode, phoneNumber);
+    if (!v.valid) {
+      toast({ variant: "destructive", title: "رقم هاتف غير صحيح", description: v.msg });
+      return;
+    }
+    setOtpBusy(true);
+    try {
+      await httpsCallable(getFunctions(), "sendWhatsappOtp")({ phone: `${countryCode}${phoneNumber}`, purpose: "register" });
+      setOtpSent(true);
+      setOtpCountdown(60);
+      toast({ title: "اتبعت الكود", description: "شوف رسايل واتساب على الرقم اللي كتبته." });
+    } catch (e: any) {
+      const code = String(e?.code || "");
+      if (code.includes("unavailable")) {
+        setOtpBridgeDown(true);
+        toast({ variant: "destructive", title: "واتساب مش متاح دلوقتي", description: "تقدر تكمل التسجيل من غير تأكيد، وتأكد رقمك بعدين من صفحة الملف الشخصي." });
+      } else {
+        toast({ variant: "destructive", title: "مقدرناش نبعت الكود", description: e?.message || "جرّب تاني بعد شوية." });
+      }
+    } finally {
+      setOtpBusy(false);
+    }
+  };
+
+  const verifyOtpCode = async () => {
+    setOtpBusy(true);
+    try {
+      const res: any = await httpsCallable(getFunctions(), "verifyWhatsappOtp")({ phone: `${countryCode}${phoneNumber}`, code: otpCode });
+      if (res?.data?.ok && res?.data?.proof) {
+        setOtpProof(res.data.proof);
+        setOtpVerified(true);
+        toast({ title: "تم تأكيد رقمك ✅" });
+      } else {
+        toast({ variant: "destructive", title: "الكود غير صحيح" });
+      }
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "الكود غلط أو انتهى", description: e?.message || "" });
+    } finally {
+      setOtpBusy(false);
+    }
+  };
 
   // الكشف عن الدولة تلقائياً حسب IP
   useEffect(() => {
@@ -193,7 +270,7 @@ function LoginContent() {
       return;
     }
 
-    if (requireOtp && !otpVerified) {
+    if (requireOtp && !otpVerified && !otpBridgeDown) {
       toast({ variant: "destructive", title: "أكد رقم الموبايل الأول", description: "اضغط «أرسل كود على واتساب» وأدخل الكود اللي هيوصلك." });
       return;
     }
@@ -351,6 +428,8 @@ function LoginContent() {
 
                   {otpVerified ? (
                     <p className="text-sm font-bold text-emerald-700">رقمك اتأكد، كمّل التسجيل عادي.</p>
+                  ) : otpBridgeDown ? (
+                    <p className="text-sm font-bold text-amber-700">خدمة واتساب مش متاحة دلوقتي. تقدر تكمل التسجيل، وتأكد رقمك بعدين من «توثيق الرقم» في ملفك الشخصي.</p>
                   ) : (
                     <>
                       <Button
