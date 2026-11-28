@@ -51,6 +51,7 @@ const PREFIX = String(process.env.BRIDGE_PREFIX || '').trim();
 const PAIR_PHONE = String(process.env.PAIR_PHONE || '').replace(/[^\d]/g, '');
 const AUTH_BACKUP = String(process.env.AUTH_BACKUP || 'on') !== 'off';
 const OUTBOX_MAX_AGE_MS = 15 * 60 * 1000;
+const OTP_MAX_AGE_MS = 60 * 1000; // الكود القديم ما يتبعتش
 const AUTH_DOC = 'whatsapp';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -299,10 +300,12 @@ async function processOutbox(ref, data) {
   if (claimed.has(id)) return;
   claimed.add(id);
   const waId = String(data.waId || '');
-  const msgRef = waId && db ? db.collection('whatsappConversations').doc(waId).collection('messages').doc(`out_${id}`) : null;
+  const isOtp = data.kind === 'otp';
+  const msgRef = !isOtp && waId && db ? db.collection('whatsappConversations').doc(waId).collection('messages').doc(`out_${id}`) : null;
   try {
     const age = data.createdAt?.toDate ? Date.now() - data.createdAt.toDate().getTime() : 0;
-    if (age > OUTBOX_MAX_AGE_MS) {
+    if (age > (isOtp ? OTP_MAX_AGE_MS : OUTBOX_MAX_AGE_MS)) {
+      if (isOtp) { await ref.set({ status: 'failed', error: 'expired', text: '[expired]', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); log('otp expired ->', waId); return; }
       await ref.set({ status: 'failed', error: 'expired', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       if (msgRef) await msgRef.set({ status: 'failed' }, { merge: true }).catch(() => {});
       log('outbox expired ->', waId);
@@ -317,13 +320,27 @@ async function processOutbox(ref, data) {
     });
     if (!gotIt) return;
 
+    if (isOtp) {
+      // تأكد إن الرقم عليه واتساب قبل الإرسال (الإرسال لأرقام مش مسجلة بيرفع خطر الحظر)
+      const found = await sock.onWhatsApp(waId).catch(() => null);
+      if (!found || !found[0]?.exists) {
+        await ref.set({ status: 'failed', error: 'not_on_whatsapp', text: '[otp]', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        log('otp skipped (not on whatsapp) ->', waId);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 800 + Math.floor(Math.random() * 1200)));
+      await sock.sendMessage(found[0].jid || map.jidFromWaId(waId), { text: String(data.text || '') });
+      await ref.set({ status: 'sent', text: '[otp]', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      log('otp sent ->', waId);
+      return;
+    }
     await sock.sendMessage(map.jidFromWaId(waId), { text: String(data.text || '') });
     await ref.set({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     if (msgRef) await msgRef.set({ status: 'sent' }, { merge: true }).catch(() => {});
     log('outbox sent ->', waId);
   } catch (e) {
     const err = String(e.message || e).slice(0, 200);
-    await ref.set({ status: 'failed', error: err, sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
+    await ref.set({ status: 'failed', error: err, ...(isOtp ? { text: '[otp]' } : {}), sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
     if (msgRef) await msgRef.set({ status: 'failed' }, { merge: true }).catch(() => {});
     log('outbox failed ->', waId, err);
   } finally {
@@ -358,6 +375,15 @@ function watchOutbox() {
     );
   log('outbox watcher: ok');
 }
+
+// نبض الجسر: المنصة بتقرأه عشان تعرف الجسر شغال قبل ما تبعت كود تحقق
+async function heartbeat() {
+  if (!db) return;
+  try {
+    await db.collection('bridgeStatus').doc('main').set({ ready, at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  } catch (e) { log('heartbeat failed:', e.message); }
+}
+setInterval(heartbeat, 30000);
 
 // ===== فحص صحة =====
 http
