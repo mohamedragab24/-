@@ -135,6 +135,7 @@ let ready = false;
 let connecting = false;
 let reconnectTimer = null;
 const lastMenu = new Map();
+const lidJids = new Map(); // waId (رقم LID) -> jid الأصلي، عشان الرد من اللوحة يروح للمعرّف الصح
 
 async function start() {
   if (connecting) return;
@@ -261,7 +262,7 @@ async function handleIncoming(m) {
     if (!pn) {
       try { pn = (await sock.signalRepository?.lidMapping?.getPNForLID?.(jid)) || ''; } catch (_) {}
     }
-    if (!pn) log('lid بدون رقم، مفاتيح الرسالة:', Object.keys(m.key).join(','));
+    if (!pn) { log('lid بدون رقم، مفاتيح الرسالة:', Object.keys(m.key).join(',')); lidJids.set(waId, jid); }
     else waId = map.waIdFromJid(String(pn));
   }
   if (!waId) return;
@@ -294,6 +295,17 @@ async function handleIncoming(m) {
 
 // ===== ردود الأدمن من اللوحة (outbox) =====
 const claimed = new Set();
+
+// يحدد الـ jid الصح للرد: LID محفوظ من رسالة واردة، أو رقم حقيقي موجود على واتساب، أو LID بالشكل (14+ رقم)
+async function resolveJid(waId) {
+  if (lidJids.has(waId)) return lidJids.get(waId);
+  try {
+    const found = await sock.onWhatsApp(waId);
+    if (found && found[0]?.exists) return found[0].jid || map.jidFromWaId(waId);
+  } catch (_) {}
+  if (waId.length >= 14) return `${waId}@lid`;
+  return null;
+}
 
 async function processOutbox(ref, data) {
   const id = ref.id;
@@ -334,7 +346,14 @@ async function processOutbox(ref, data) {
       log('otp sent ->', waId);
       return;
     }
-    await sock.sendMessage(map.jidFromWaId(waId), { text: String(data.text || '') });
+    const target = await resolveJid(waId);
+    if (!target) {
+      await ref.set({ status: 'failed', error: 'not_on_whatsapp', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      if (msgRef) await msgRef.set({ status: 'failed' }, { merge: true }).catch(() => {});
+      log('outbox failed (no valid jid) ->', waId);
+      return;
+    }
+    await sock.sendMessage(target, { text: String(data.text || '') });
     await ref.set({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     if (msgRef) await msgRef.set({ status: 'sent' }, { merge: true }).catch(() => {});
     log('outbox sent ->', waId);
