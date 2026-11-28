@@ -25,6 +25,7 @@ import { doc, updateDoc, addDoc, collection } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { signOut } from "firebase/auth";
 import { useRouter } from "next/navigation";
+import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 export default function ProfilePage() {
@@ -70,6 +71,59 @@ export default function ProfilePage() {
     }
   };
 
+  const [pvSent, setPvSent] = useState(false);
+  const [pvCode, setPvCode] = useState("");
+  const [pvBusy, setPvBusy] = useState(false);
+  const [pvCountdown, setPvCountdown] = useState(0);
+  useEffect(() => {
+    if (pvCountdown <= 0) return;
+    const t = setTimeout(() => setPvCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [pvCountdown]);
+
+  const samePhone = (a: string, b: string) => String(a || "").replace(/\D/g, "").replace(/^0+/, "") === String(b || "").replace(/\D/g, "").replace(/^0+/, "");
+  const phoneChanged = !!profile && !samePhone(formData.phoneNumber, profile.phoneNumber || "");
+  const phoneVerified = !!profile?.phoneVerified && !phoneChanged;
+
+  const sendPhoneCode = async () => {
+    if (!userRef || !profile) return;
+    if (String(formData.phoneNumber).replace(/\D/g, "").length < 10) {
+      toast({ variant: "destructive", title: "اكتب رقم صحيح الأول" });
+      return;
+    }
+    setPvBusy(true);
+    try {
+      if (phoneChanged) {
+        await updateDoc(userRef, { phoneNumber: formData.phoneNumber, phoneVerified: false, updatedAt: new Date().toISOString() });
+      }
+      await httpsCallable(getFunctions(), "sendWhatsappOtp")({ phone: formData.phoneNumber, purpose: "verify" });
+      setPvSent(true);
+      setPvCountdown(60);
+      toast({ title: "اتبعت الكود", description: "شوف رسايل واتساب على الرقم ده." });
+    } catch (e: any) {
+      const unavailable = String(e?.code || "").includes("unavailable");
+      toast({ variant: "destructive", title: unavailable ? "واتساب مش متاح دلوقتي" : "مقدرناش نبعت الكود", description: unavailable ? "جرّب كمان شوية." : (e?.message || "جرّب تاني بعد شوية.") });
+    } finally {
+      setPvBusy(false);
+    }
+  };
+
+  const confirmPhoneCode = async () => {
+    setPvBusy(true);
+    try {
+      const res: any = await httpsCallable(getFunctions(), "verifyWhatsappOtp")({ phone: formData.phoneNumber, code: pvCode });
+      if (!res?.data?.ok || !res?.data?.proof) throw new Error("الكود غير صحيح");
+      await httpsCallable(getFunctions(), "markPhoneVerified")({ phone: formData.phoneNumber, proof: res.data.proof });
+      setPvSent(false);
+      setPvCode("");
+      toast({ title: "تم توثيق رقمك ✅" });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "الكود غلط أو انتهى", description: e?.message || "" });
+    } finally {
+      setPvBusy(false);
+    }
+  };
+
   const handleSaveBasic = async () => {
     if (!userRef || !profile) return;
     setIsSaving(true);
@@ -79,6 +133,7 @@ export default function ProfilePage() {
         birthDate: formData.birthDate ? new Date(formData.birthDate).toISOString() : null,
         bio: formData.bio,
         phoneNumber: formData.phoneNumber,
+        ...(phoneChanged ? { phoneVerified: false } : {}),
         updatedAt: new Date().toISOString(),
         needsProfileCompletion: false
       };
@@ -172,8 +227,20 @@ export default function ProfilePage() {
                 <Label className="font-black">رقم الهاتف</Label>
                 <div className="flex gap-2">
                   <Input value={formData.phoneNumber} onChange={(e)=>setFormData({...formData, phoneNumber: e.target.value})} className="h-14 rounded-xl border-2 font-mono" dir="ltr" />
-                  <Button variant="outline" className="h-14 rounded-xl font-bold border-primary text-primary">توثيق الرقم</Button>
+                  {phoneVerified ? (
+                    <Badge className="h-14 px-4 rounded-xl bg-emerald-600 text-white font-bold gap-1"><CheckCircle2 size={16} /> موثّق</Badge>
+                  ) : (
+                    <Button type="button" onClick={sendPhoneCode} disabled={pvBusy || pvCountdown > 0} variant="outline" className="h-14 rounded-xl font-bold border-primary text-primary">
+                      {pvBusy ? <Loader2 className="animate-spin" size={18} /> : pvCountdown > 0 ? `إعادة الإرسال بعد ${pvCountdown}` : pvSent ? "إرسال كود جديد" : "توثيق الرقم"}
+                    </Button>
+                  )}
                 </div>
+                {!phoneVerified && pvSent && (
+                  <div className="flex gap-2 pt-2" dir="ltr">
+                    <Input value={pvCode} onChange={(e)=>setPvCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" inputMode="numeric" maxLength={6} className="h-14 rounded-xl border-2 font-black text-center text-2xl tracking-[0.4em]" />
+                    <Button type="button" onClick={confirmPhoneCode} disabled={pvBusy || pvCode.length !== 6} className="h-14 rounded-xl px-6 font-black">تأكيد</Button>
+                  </div>
+                )}
               </div>
               <div className="md:col-span-2 space-y-2">
                 <Label className="font-black">نبذة تعريفية</Label>
