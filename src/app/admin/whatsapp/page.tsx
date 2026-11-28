@@ -624,6 +624,7 @@ export default function AdminWhatsApp() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
 
         {/* ================= كود التحقق OTP ================= */}
         <TabsContent value="otp" className="mt-4 space-y-4">
@@ -686,7 +687,7 @@ export default function AdminWhatsApp() {
                     try {
                       const fn = httpsCallable(getFunctions(), "sendWhatsappOtpTest");
                       const res = await fn({ phone: otpPhone.trim() });
-                      setOtpResult(`تم الإرسال ✅ عبر: ${res?.data?.channel === "template" ? "قالب معتمد" : "رسالة نصية"} — صالح ${res?.data?.expiresInSeconds || 300} ثانية`);
+                      setOtpResult(`تم الإرسال ✅ عبر: ${res?.data?.channel === "bridge" ? "واتساب (الجسر)" : res?.data?.channel === "template" ? "قالب معتمد" : "رسالة نصية"} — صالح ${res?.data?.expiresInSeconds || 300} ثانية`);
                     } catch (e: any) {
                       setOtpResult(`فشل: ${e?.message || e}`);
                     } finally {
@@ -699,12 +700,10 @@ export default function AdminWhatsApp() {
               </div>
               {otpResult && <p className="text-sm font-bold">{otpResult}</p>}
               <p className="text-xs text-muted-foreground">
-                لازم تكون ضفت WHATSAPP_ACCESS_TOKEN و WHATSAPP_PHONE_NUMBER_ID وعملت Redeploy الأول. لو القالب لسه مش معتمد،
-                ابعت رسالة للبوت من نفس الرقم الأول عشان تفتح نافذة الـ24 ساعة.
+                لو OTP_TRANSPORT=bridge الكود بيتبعت من رقم الجسر (واتساب غير رسمي) ومش محتاج قالب ولا توكن ميتا. الجسر لازم يكون شغال (ready).
               </p>
             </CardContent>
           </Card>
-        </TabsContent>
         </TabsContent>
       </Tabs>
     </div>
