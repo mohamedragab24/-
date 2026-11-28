@@ -341,7 +341,11 @@ async function handleIncoming(m) {
   const messages = map.repliesToMessages(data?.replies);
   for (const item of messages) {
     if (item.rows?.length) lastMenu.set(waId, item.rows);
-    await sock.sendMessage(jid, { text: item.text });
+    if (item.imageUrl && (await imageOk(item.imageUrl))) {
+      await sock.sendMessage(jid, { image: { url: item.imageUrl }, caption: String(item.text || '').slice(0, 1000) });
+    } else {
+      await sock.sendMessage(jid, { text: item.text || item.imageUrl });
+    }
   }
   try { await sock.readMessages([m.key]); } catch (_) {}
   log(`in ${waId} -> ${messages.length} رد`);
