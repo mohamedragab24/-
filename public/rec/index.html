@@ -189,20 +189,26 @@
 
   function api(op, extra) { return fetch('/api/rec?op=' + op + '&t=' + encodeURIComponent(T) + (extra || ''), { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); }
 
+  function diag(x) { try { fetch('/api/rec?op=diag&t=' + encodeURIComponent(T) + '&d=' + encodeURIComponent(String(x).slice(0, 380)), { cache: 'no-store' }).catch(function () {}); } catch (_) {} }
+  window.addEventListener('error', function (e) { diag('js-error: ' + (e && e.message)); });
+  function h264Support() { try { var c = RTCRtpReceiver.getCapabilities('video').codecs.map(function (x) { return x.mimeType.replace('video/', ''); }); return c.filter(function (v, i) { return c.indexOf(v) === i; }).join(','); } catch (e) { return 'n/a ' + e; } }
   function joinRtc(cfg) {
+    diag('start ua=' + navigator.userAgent.slice(-60) + ' decoders=' + h264Support());
     var client = AgoraRTC.createClient({ mode: 'live', codec: 'h264' });
     client.setClientRole('audience');
     client.on('user-published', function (user, type) {
-      client.subscribe(user, type).then(function () {
+      diag('published uid=' + user.uid + ' ' + type); client.subscribe(user, type).then(function () {
+        diag('subscribed uid=' + user.uid + ' ' + type);
         var u = users[user.uid] || (users[user.uid] = { video: null });
         if (type === 'video') u.video = user.videoTrack;
         if (type === 'audio' && user.audioTrack) user.audioTrack.play(); // الصوت هو ما تسجّله Agora من الصفحة
         renderTiles();
-      }).catch(function () {});
+        if (type === 'video') setTimeout(function () { try { var st = user.videoTrack.getStats(); diag('video uid=' + user.uid + ' ' + st.receiveResolutionWidth + 'x' + st.receiveResolutionHeight + ' fps=' + st.receiveFrameRate + ' bitrate=' + st.receiveBitrate + ' decoded=' + st.receiveFrameRate + ' codec?=' + (user.videoTrack.getMediaStreamTrack().readyState)); var v = document.querySelector('video'); if (v) diag('el ' + v.videoWidth + 'x' + v.videoHeight + ' paused=' + v.paused + ' rs=' + v.readyState); } catch (e) { diag('stats err ' + e); } }, 6000);
+      }).catch(function (e) { diag('subscribe-fail ' + type + ' ' + (e && e.message)); });
     });
     client.on('user-unpublished', function (user, type) { if (type === 'video' && users[user.uid]) { users[user.uid].video = null; renderTiles(); } });
     client.on('user-left', function (user) { delete users[user.uid]; renderTiles(); });
-    return client.join(cfg.appId, cfg.channel, cfg.token, cfg.uid);
+    return client.join(cfg.appId, cfg.channel, cfg.token, cfg.uid).then(function (r) { diag('joined uid=' + r + ' ch=' + cfg.channel); return r; });
   }
 
   // ---------------- حلقة الأحداث ----------------
@@ -217,7 +223,7 @@
   }
 
   window.addEventListener('resize', function () { renderPdfPage(); drawInk(); });
-  api('config').then(function (cfg) { return joinRtc(cfg); }).catch(function () {});
+  api('config').then(function (cfg) { return joinRtc(cfg); }).catch(function (e) { diag('join-fail ' + (e && (e.code || e.message))); });
   poll(); layout();
 })();
 </script>
