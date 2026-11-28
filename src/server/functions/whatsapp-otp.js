@@ -421,6 +421,16 @@ async function markPhoneVerified(request) {
   return { ok: true, phone: waNumber };
 }
 
+/** سياسة التسجيل: هل مطلوب OTP؟ وهل البريدج شغال؟ (متاحة بدون تسجيل دخول، ما بترجّعش غير قيمتين) */
+module.exports.getOtpPolicy = onCall(async () => {
+  let requireOtpOnSignup = false;
+  try {
+    const snap = await db().doc('settings/whatsappBot').get();
+    requireOtpOnSignup = !!(snap.exists && (snap.data() || {}).requireOtpOnSignup === true);
+  } catch (_) {}
+  const bridgeUp = transport() === 'bridge' ? await bridgeIsUp() : true;
+  return { requireOtpOnSignup, bridgeUp };
+});
 module.exports.sendWhatsappOtp = onCall(async (request) => sendOtp(request));
 module.exports.markPhoneVerified = onCall(async (request) => markPhoneVerified(request));
 module.exports.verifyWhatsappOtp = onCall(async (request) => verifyOtp(request));
