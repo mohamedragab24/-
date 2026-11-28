@@ -15,12 +15,14 @@ const MAX_RECIPIENTS = 2000;
 const MAX_RAW_CHARS = 400000;
 
 /** يطلّع الأرقام المحتملة من نص حر (لصق أو ملف): سطر سطر، وبفواصل , ; | tab */
+const toAsciiDigits = (v) => String(v || '').replace(/[\u0660-\u0669]/g, (c) => String(c.charCodeAt(0) - 0x660)).replace(/[\u06F0-\u06F9]/g, (c) => String(c.charCodeAt(0) - 0x6F0));
+
 function extractCandidates(text) {
   const out = [];
-  const lines = String(text || '').slice(0, MAX_RAW_CHARS).split(/\r?\n/);
+  const lines = toAsciiDigits(text).slice(0, MAX_RAW_CHARS).split(/\r?\n/);
   for (const line of lines) {
     for (const piece of line.split(/[,;|\t]+/)) {
-      const m = piece.match(/\+?\(?\d[\d\s().\-]{5,}\d/g);
+      const m = piece.match(/\+?\(?\d[\d\s().\-]{3,}\d/g);
       if (m) for (const x of m) out.push(x.trim());
     }
   }
@@ -34,14 +36,16 @@ function extractCandidates(text) {
  */
 function normalizeNumber(raw, defaultCc) {
   const cc = String(defaultCc || '20').replace(/\D/g, '') || '20';
-  let plus = String(raw || '').trim().startsWith('+');
-  let d = String(raw || '').replace(/\D/g, '');
+  raw = toAsciiDigits(raw);
+  let plus = raw.trim().startsWith('+');
+  let d = raw.replace(/\D/g, '');
   if (!d) return { error: 'فاضي' };
   if (d.startsWith('00')) { d = d.slice(2); plus = true; }
   if (!plus) {
     if (d.startsWith('0')) d = cc + d.replace(/^0+/, '');
     else if (cc === '20' && d.length === 10 && d.startsWith('1')) d = '20' + d;
   }
+  if (d.startsWith('200') && d.length === 13) d = '20' + d.slice(3); // +2001208015262 → 201208015262
   if (d.length < 10) return { error: 'قصير أوي' };
   if (d.length > 15) return { error: 'طويل أوي' };
   if (d.startsWith('20') && !/^20(10|11|12|15)\d{8}$/.test(d)) return { error: 'رقم مصري غير صالح (لازم موبايل 010/011/012/015)' };
@@ -75,7 +79,7 @@ async function requireAdmin(request) {
 }
 
 function waNumber(v) {
-  return require('./whatsapp-otp').toWaNumber(v);
+  return require('./whatsapp-otp').toWaNumber(toAsciiDigits(v));
 }
 
 /** يبني قائمة مستلمين فريدة من المستخدمين حسب الشريحة */
@@ -108,12 +112,15 @@ function buildMessage(text, link) {
   return parts.filter(Boolean).join('\n\n');
 }
 
+/** يقبل اللينك بدون https:// ويضيفه. بيرجع '' لو غلط. */
 function cleanUrl(u) {
-  const s = String(u || '').trim();
+  let s = String(u || '').trim().replace(/\s+/g, '');
   if (!s) return '';
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) { /* فيه بروتوكول */ } else if (/^[a-z][a-z0-9+.-]*:/i.test(s) && !/^[^/]+\.[a-z]{2,}(:\d+)?(\/|$)/i.test(s)) { return ''; } else s = 'https://' + s.replace(/^\/\//, '');
   try {
     const x = new URL(s);
     if (x.protocol !== 'https:' && x.protocol !== 'http:') return '';
+    if (!x.hostname.includes('.') && x.hostname !== 'localhost') return '';
     return x.toString();
   } catch (_) {
     return '';
@@ -174,9 +181,10 @@ module.exports.createWhatsappCampaign = onCall(async (request) => {
   const text = String(d.text || '').trim().slice(0, 900);
   const link = cleanUrl(d.link);
   const imageUrl = cleanUrl(d.imageUrl);
+  if (d.imageUrl && !imageUrl) throw new HttpsError('invalid-argument', 'رابط الصورة غير صحيح، ارفع الصورة من الزر.');
   if (!name) throw new HttpsError('invalid-argument', 'اكتب اسم للحملة');
   if (!text) throw new HttpsError('invalid-argument', 'اكتب نص الرسالة');
-  if (d.link && !link) throw new HttpsError('invalid-argument', 'اللينك غير صحيح');
+  if (d.link && !link) throw new HttpsError('invalid-argument', 'اللينك غير صحيح. اكتبه زي: fahemt.online أو https://fahemt.online/course');
   const audience = String(d.audience || 'all');
   const parsed = audience === 'custom' ? parseNumbers(d.numbersText, d.defaultCc) : { rejected: [] };
   const { list } = audience === 'custom'
@@ -218,7 +226,7 @@ module.exports.createWhatsappCampaign = onCall(async (request) => {
 module.exports.testWhatsappCampaign = onCall(async (request) => {
   await requireAdmin(request);
   const d = request.data || {};
-  const phone = waNumber(d.phone);
+  const phone = waNumber(toAsciiDigits(d.phone).replace(/^\+?200(?=1[0125]\d{8}$)/, '20'));
   if (!phone || phone.length < 11) throw new HttpsError('invalid-argument', 'اكتب رقمك بشكل صحيح');
   const ref = db().collection('whatsappCampaigns').doc(String(d.id || 'x'));
   const snap = await ref.get();
@@ -255,5 +263,40 @@ module.exports.setWhatsappCampaignStatus = onCall(async (request) => {
   } else {
     throw new HttpsError('invalid-argument', 'إجراء غير معروف');
   }
+  return { ok: true };
+});
+
+/** تعديل حملة (مسودة / موقوفة مؤقتًا / متوقفة): الاسم والنص واللينك والصورة والحد اليومي. أي تعديل يلغي التجربة السابقة. */
+module.exports.updateWhatsappCampaign = onCall(async (request) => {
+  await requireAdmin(request);
+  const d = request.data || {};
+  const ref = db().collection('whatsappCampaigns').doc(String(d.id || 'x'));
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'الحملة غير موجودة');
+  const c = snap.data() || {};
+  if (!['draft', 'paused', 'stopped'].includes(c.status)) throw new HttpsError('failed-precondition', 'مينفعش تعدّل حملة شغالة أو خلصت. أوقفها الأول.');
+  const name = String(d.name ?? c.name).trim().slice(0, 80);
+  const text = String(d.text ?? c.text).trim().slice(0, 900);
+  const link = d.link === undefined ? (c.link || '') : cleanUrl(d.link);
+  const imageUrl = d.imageUrl === undefined ? (c.imageUrl || '') : cleanUrl(d.imageUrl);
+  if (!name) throw new HttpsError('invalid-argument', 'اكتب اسم للحملة');
+  if (!text) throw new HttpsError('invalid-argument', 'اكتب نص الرسالة');
+  if (d.link && !link) throw new HttpsError('invalid-argument', 'اللينك غير صحيح. اكتبه زي: fahemt.online أو https://fahemt.online/course');
+  if (d.imageUrl && !imageUrl) throw new HttpsError('invalid-argument', 'رابط الصورة غير صحيح');
+  const dailyCap = Math.min(300, Math.max(10, Number(d.dailyCap ?? c.dailyCap) || 100));
+  await ref.set({ name, text, link, imageUrl, dailyCap, message: buildMessage(text, link), testSentAt: null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { ok: true };
+});
+
+/** حذف حملة (غير الشغالة) مع قائمة مستلميها */
+module.exports.deleteWhatsappCampaign = onCall(async (request) => {
+  await requireAdmin(request);
+  const ref = db().collection('whatsappCampaigns').doc(String(request.data?.id || 'x'));
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'الحملة غير موجودة');
+  if (snap.data().status === 'running') throw new HttpsError('failed-precondition', 'الحملة شغالة. اوقفها الأول وبعدين احذفها.');
+  const refs = await ref.collection('recipients').listDocuments();
+  for (let i = 0; i < refs.length; i += 400) { const b = db().batch(); refs.slice(i, i + 400).forEach((r) => b.delete(r)); await b.commit(); }
+  await ref.delete();
   return { ok: true };
 });

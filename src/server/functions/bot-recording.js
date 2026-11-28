@@ -263,4 +263,15 @@ async function sweep() {
   return res;
 }
 
-module.exports = { verifyPageToken, readEvents, rtcConfig, startGroup, startIstifham, finishGroup, finishIstifham, confirmPending, sweep, iid, gid };
+/** تشخيص صفحة التسجيل: يحفظ آخر 40 سطر في botRecordings/{id}.pageDiag */
+async function pageDiag(p, text) {
+  const id = p.k === 'g' ? gid(p.gid, p.sid) : iid(p.rid);
+  const line = `${new Date().toISOString().slice(11, 19)} ${String(text || '').slice(0, 400)}`;
+  const ref = REG().doc(id);
+  await db.runTransaction(async (tx) => {
+    const d = await tx.get(ref); const cur = (d.exists && Array.isArray(d.data().pageDiag)) ? d.data().pageDiag : [];
+    tx.set(ref, { pageDiag: cur.concat(line).slice(-40) }, { merge: true });
+  });
+}
+
+module.exports = { pageDiag, verifyPageToken, readEvents, rtcConfig, startGroup, startIstifham, finishGroup, finishIstifham, confirmPending, sweep, iid, gid };
