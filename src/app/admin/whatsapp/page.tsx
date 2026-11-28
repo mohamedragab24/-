@@ -22,7 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import CampaignsTab from "./campaigns-tab";
-import { ImageField, MenuEditor, DEFAULT_MENU, type MenuItem } from "./bot-extras";
+import { ImageField, MenuEditor, SequenceEditor, DEFAULT_MENU, legacyToSteps, MAX_STEPS, type MenuItem, type Step } from "./bot-extras";
 import {
   MessageCircle, Send, Search, Bot, UserRound, Loader2, Copy, CheckCircle2,
   Phone, Clock, Settings2, BookOpen, RefreshCw, ExternalLink, Plus, Trash2, ShieldAlert,
@@ -146,7 +146,7 @@ export default function AdminWhatsApp() {
   const { data: settings } = useDoc(settingsRef);
 
   const [texts, setTexts] = useState<Record<string, string>>(DEFAULT_TEXTS);
-  const [faqs, setFaqs] = useState<{ id: string; question: string; answers: string[]; imageUrl?: string }[]>([]);
+  const [faqs, setFaqs] = useState<{ id: string; question: string; messages: Step[] }[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>(DEFAULT_MENU.map((x) => ({ ...x })));
   const [replyImage, setReplyImage] = useState("");
   const [keywords, setKeywords] = useState("");
@@ -162,17 +162,20 @@ export default function AdminWhatsApp() {
       rawFaqs.map((f: any, idx: number) => ({
         id: String(f?.id || `faq_${idx}_${Date.now()}`),
         question: String(f?.question || ""),
-        imageUrl: String(f?.imageUrl || ""),
-        answers: Array.isArray(f?.answers) && f.answers.length
-          ? f.answers.map((a: any) => String(a))
-          : f?.answer ? [String(f.answer)] : [""],
+        messages: Array.isArray(f?.messages) && f.messages.length
+          ? f.messages.map((x: any) => ({ text: String(x?.text || ""), imageUrl: String(x?.imageUrl || "") }))
+          : (Array.isArray(f?.answers) && f.answers.length ? f.answers : f?.answer ? [f.answer] : [""])
+              .map((a: any, k: number) => ({ text: String(a), imageUrl: k === 0 ? String(f?.imageUrl || "") : "" })),
       }))
     );
     const rawMenu = Array.isArray((settings as any).menuItems) ? (settings as any).menuItems : [];
     if (rawMenu.length) {
       setMenuItems(rawMenu.map((m: any, idx: number) => ({
         id: String(m?.id || `custom_${idx}`), title: String(m?.title || ""), description: String(m?.description || ""),
-        answer: String(m?.answer || ""), imageUrl: String(m?.imageUrl || ""), enabled: m?.enabled !== false,
+        messages: Array.isArray(m?.messages) && m.messages.length
+          ? m.messages.map((x: any) => ({ text: String(x?.text || ""), imageUrl: String(x?.imageUrl || "") }))
+          : legacyToSteps(m?.answer, m?.imageUrl),
+        enabled: m?.enabled !== false,
       })));
     }
     setKeywords(Array.isArray((settings as any).handoffKeywords) ? (settings as any).handoffKeywords.join(", ") : "");
@@ -261,13 +264,14 @@ export default function AdminWhatsApp() {
             .map((f) => ({
               id: f.id,
               question: f.question.trim(),
-              answers: (f.answers || []).map((a) => a.trim()).filter(Boolean),
-              imageUrl: f.imageUrl || "",
+              messages: (f.messages || []).map((x) => ({ text: x.text.trim(), imageUrl: x.imageUrl || "" })).filter((x) => x.text || x.imageUrl).slice(0, MAX_STEPS),
+              answers: [],
+              imageUrl: "",
             })),
           menuItems: menuItems
             .filter((m) => m.title.trim())
             .slice(0, 10)
-            .map((m) => ({ id: m.id, title: m.title.trim(), description: m.description.trim(), answer: m.answer.trim(), imageUrl: m.imageUrl || "", enabled: m.enabled })),
+            .map((m) => ({ id: m.id, title: m.title.trim(), description: m.description.trim(), messages: (m.messages || []).map((x) => ({ text: x.text.trim(), imageUrl: x.imageUrl || "" })).filter((x) => x.text || x.imageUrl).slice(0, MAX_STEPS), answer: "", imageUrl: "", enabled: m.enabled })),
           handoffKeywords: keywords.split(",").map((s) => s.trim()).filter(Boolean),
           updatedAt: new Date().toISOString(),
           updatedBy: user?.uid || null,
@@ -514,7 +518,7 @@ export default function AdminWhatsApp() {
           <Card className="rounded-2xl">
             <CardHeader>
               <CardTitle className="text-lg font-black">أسئلة وأجوبة البوت</CardTitle>
-              <p className="text-xs text-muted-foreground">كل سؤال تقدر تحطله أكتر من رد، والبوت يختار واحد منهم عشوائي كل مرة عشان الكلام ميبقاش مكرر.</p>
+              <p className="text-xs text-muted-foreground">كل سؤال ممكن له أكتر من رسالة (نص و/أو صورة)، وبتتبعت للعميل ورا بعض بالترتيب وبفاصل قصير (حد أقصى ٨ رسايل). تقدر تضيف وتحذف وترتب.</p>
             </CardHeader>
             <CardContent className="space-y-3">
               {faqs.map((f, i) => (
@@ -536,61 +540,23 @@ export default function AdminWhatsApp() {
                     </Button>
                   </div>
 
-                  <ImageField value={f.imageUrl || ""} onChange={(url) => setFaqs((list) => list.map((x, idx) => (idx === i ? { ...x, imageUrl: url } : x)))} label="صورة مع الرد" />
-                  <div className="space-y-2">
-                    {(f.answers || []).map((answer, ai) => (
-                      <div key={ai} className="flex gap-2 items-start">
-                        <span className="text-[10px] font-black text-muted-foreground mt-4 w-10 shrink-0">رد {ai + 1}</span>
-                        <Textarea
-                          value={answer}
-                          onChange={(e) =>
-                            setFaqs((list) =>
-                              list.map((x, idx) =>
-                                idx === i ? { ...x, answers: x.answers.map((a, j) => (j === ai ? e.target.value : a)) } : x
-                              )
-                            )
-                          }
-                          placeholder="نص الرد"
-                          className="rounded-lg min-h-[60px] text-sm"
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title="حذف الرد"
-                          disabled={(f.answers || []).length <= 1}
-                          onClick={() =>
-                            setFaqs((list) =>
-                              list.map((x, idx) => (idx === i ? { ...x, answers: x.answers.filter((_, j) => j !== ai) } : x))
-                            )
-                          }
-                        >
-                          <Trash2 size={14} className="text-zinc-400" />
-                        </Button>
-                      </div>
-                    ))}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-lg gap-1"
-                      onClick={() =>
-                        setFaqs((list) => list.map((x, idx) => (idx === i ? { ...x, answers: [...(x.answers || []), ""] } : x)))
-                      }
-                    >
-                      <Plus size={14} /> إضافة رد آخر
-                    </Button>
-                  </div>
+                  <SequenceEditor
+                    steps={f.messages}
+                    onChange={(messages) => setFaqs((list) => list.map((x, idx) => (idx === i ? { ...x, messages } : x)))}
+                    placeholder="نص الرسالة"
+                  />
                 </div>
               ))}
 
               <Button
                 variant="outline"
                 className="rounded-xl gap-2"
-                onClick={() => setFaqs((l) => [...l, { id: `faq_${Date.now()}`, question: "", answers: [""] }])}
+                onClick={() => setFaqs((l) => [...l, { id: `faq_${Date.now()}`, question: "", messages: [{ text: "", imageUrl: "" }] }])}
               >
                 <Plus size={16} /> إضافة سؤال جديد
               </Button>
               <p className="text-xs text-muted-foreground">
-                المطابقة بالكلمات المفتاحية: لو رسالة العميل فيها كلمة من السؤال (٣ حروف أو أكتر) البوت يرد بأحد الردود.
+                المطابقة بالكلمات المفتاحية: لو رسالة العميل فيها كلمة من السؤال (٣ حروف أو أكتر) البوت يبعت رسايل السؤال بالترتيب.
                 لو مفيش تطابق بيرد بالردود الجاهزة (الكورسات، الحجز، الدفع...).
               </p>
             </CardContent>
