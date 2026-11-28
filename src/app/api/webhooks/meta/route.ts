@@ -35,3 +35,4 @@ export async function POST(request: NextRequest) {
 // redeploy: bridge secret
 // redeploy: firebase key v2
 // redeploy: OTP transport bridge
+// redeploy: firebase key v3
