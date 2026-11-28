@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
       const out = await bot.readEvents(p, Number(url.searchParams.get("after") || 0));
       return NextResponse.json(out, { headers: { "Cache-Control": "no-store" } });
     }
+    if (op === "diag") { await bot.pageDiag(p, url.searchParams.get("d") || ""); return NextResponse.json({ ok: true }); }
     return NextResponse.json({ error: "bad op" }, { status: 400 });
   } catch (e: any) {
     const expired = /jwt|signature|expired/i.test(String(e?.message || ""));
