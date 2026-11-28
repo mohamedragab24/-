@@ -50,6 +50,38 @@ const ALLOW_GROUPS = String(process.env.BRIDGE_ALLOW_GROUPS || '0') === '1';
 const PREFIX = String(process.env.BRIDGE_PREFIX || '').trim();
 const PAIR_PHONE = String(process.env.PAIR_PHONE || '').replace(/[^\d]/g, '');
 const AUTH_BACKUP = String(process.env.AUTH_BACKUP || 'on') !== 'off';
+
+// ===== حد إرسال عام (حماية الرقم من الحظر) =====
+// كل الرسائل الصادرة بتعدي من هنا: OTP له أولوية، والحملات بتستنى لو فيه OTP مستني.
+const LIMITS = {
+  otp: { perMin: Number(process.env.LIM_OTP_MIN || 10), perHour: Number(process.env.LIM_OTP_HOUR || 150), gap: 1500 },
+  admin: { perMin: Number(process.env.LIM_ADMIN_MIN || 15), perHour: Number(process.env.LIM_ADMIN_HOUR || 300), gap: 2500 },
+  campaign: { perMin: Number(process.env.LIM_CAMP_MIN || 4), perHour: Number(process.env.LIM_CAMP_HOUR || 60), gap: 6000 },
+};
+const sentTimes = [];
+let lastSendAt = 0;
+let otpWaiting = 0;
+async function acquireSlot(kind) {
+  const lim = LIMITS[kind] || LIMITS.admin;
+  if (kind === 'otp') otpWaiting++;
+  try {
+    for (;;) {
+      const now = Date.now();
+      while (sentTimes.length && now - sentTimes[0] > 3600000) sentTimes.shift();
+      const lastMin = sentTimes.filter((t) => now - t < 60000).length;
+      const blockedByOtp = kind === 'campaign' && otpWaiting > 0;
+      if (!blockedByOtp && lastMin < lim.perMin && sentTimes.length < lim.perHour && now - lastSendAt >= lim.gap) {
+        lastSendAt = now;
+        sentTimes.push(now);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1000 + Math.floor(Math.random() * 1500)));
+    }
+  } finally {
+    if (kind === 'otp') otpWaiting--;
+  }
+}
+
 const OUTBOX_MAX_AGE_MS = 15 * 60 * 1000;
 const OTP_MAX_AGE_MS = 60 * 1000; // الكود القديم ما يتبعتش
 const AUTH_DOC = 'whatsapp-v7'; // مستند جديد لجلسة Baileys v7 (الجلسة القديمة v6 مش متوافقة)
@@ -284,6 +316,15 @@ async function handleIncoming(m) {
   const type = map.mediaTypeOf(m);
   const choiceId = map.choiceIdOf(m) || map.choiceFromText(text, lastMenu.get(waId));
 
+  if (OPTOUT_RE.test(String(text || '').trim()) && db) {
+    try {
+      await db.collection('whatsappOptOut').doc(waId).set({ waId, at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await sock.sendMessage(jid, { text: 'تمام، وقفنا الرسائل الدعائية على رقمك. لو احتجت أي مساعدة ابعتلنا هنا.' });
+      log('optout ->', waId);
+    } catch (e) { log('optout failed:', e.message); }
+    return;
+  }
+
   const res = await fetch(`${PLATFORM_URL}/api/whatsapp/bridge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SECRET },
@@ -326,7 +367,8 @@ async function processOutbox(ref, data) {
   claimed.add(id);
   const waId = String(data.waId || '');
   const isOtp = data.kind === 'otp';
-  const msgRef = !isOtp && waId && db ? db.collection('whatsappConversations').doc(waId).collection('messages').doc(`out_${id}`) : null;
+  const skipLog = isOtp || String(data.kind || '').startsWith('campaign');
+  const msgRef = !skipLog && waId && db ? db.collection('whatsappConversations').doc(waId).collection('messages').doc(`out_${id}`) : null;
   try {
     const age = data.createdAt?.toDate ? Date.now() - data.createdAt.toDate().getTime() : 0;
     if (age > (isOtp ? OTP_MAX_AGE_MS : OUTBOX_MAX_AGE_MS)) {
@@ -362,6 +404,7 @@ async function processOutbox(ref, data) {
       }
       if (lidJid && !lidJid.includes('@')) lidJid += '@lid';
       const targetJid = lidJid || pnJid;
+      await acquireSlot('otp');
       const sentOtp = await sock.sendMessage(targetJid, { text: String(data.text || '') });
       log('otp jid', targetJid.replace(/^(\d{6})\d+/, '$1***'), lidJid ? '(lid)' : '(pn)', 'id', String(sentOtp?.key?.id || '').slice(0, 8));
       await ref.set({ status: 'sent', text: '[otp]', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
@@ -375,7 +418,10 @@ async function processOutbox(ref, data) {
       log('outbox failed (no valid jid) ->', waId);
       return;
     }
-    const sentOut = await sock.sendMessage(target, { text: String(data.text || '') });
+    await acquireSlot(String(data.kind || '').startsWith('campaign') ? 'campaign' : 'admin');
+    const imgUrl = typeof data.imageUrl === 'string' && /^https?:\/\//.test(data.imageUrl) ? data.imageUrl : '';
+    if (imgUrl && !(await imageOk(imgUrl))) throw new Error('image_too_large_or_unreachable');
+    const sentOut = await sock.sendMessage(target, imgUrl ? { image: { url: imgUrl }, caption: String(data.text || '').slice(0, 1000) } : { text: String(data.text || '') });
     log('outbox jid', String(target).replace(/^(\d{6})\d+/, '$1***'), 'id', String(sentOut?.key?.id || '').slice(0, 8));
     await ref.set({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     if (msgRef) await msgRef.set({ status: 'sent' }, { merge: true }).catch(() => {});
@@ -417,6 +463,132 @@ function watchOutbox() {
     );
   log('outbox watcher: ok');
 }
+
+
+// ===== حملات واتساب الإعلانية =====
+const OPTOUT_RE = /^(إيقاف|ايقاف|ايقاف الرسائل|إيقاف الرسائل|stop|unsubscribe)$/i;
+const IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
+
+// فحص حجم الصورة قبل الإرسال (من غير تحميلها في الذاكرة)
+async function imageOk(url) {
+  try {
+    const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return false;
+    const len = Number(r.headers.get('content-length') || 0);
+    const type = String(r.headers.get('content-type') || '');
+    return type.startsWith('image/') && len > 0 && len <= IMAGE_MAX_BYTES;
+  } catch (_) { return false; }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let campaignBusy = false;
+
+// ينتظر مدة معينة لكن يقطع لو الحملة اتوقفت أو الجسر فصل. يرجّع true لو لسه شغالة.
+async function waitWhileRunning(cref, ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    await sleep(Math.min(5000, end - Date.now()));
+    if (!ready) return false;
+    const st = (await cref.get()).data()?.status;
+    if (st !== 'running') return false;
+  }
+  return true;
+}
+
+async function campaignTick() {
+  if (campaignBusy || !ready || !sock || !db) return;
+  campaignBusy = true;
+  try {
+    const q = await db.collection('whatsappCampaigns').where('status', '==', 'running').limit(1).get();
+    if (q.empty) return;
+    const cref = q.docs[0].ref;
+    log('campaign: شغالة', q.docs[0].id);
+    let sinceBatch = 0;
+    let consecutiveFails = 0;
+    while (ready) {
+      const c = (await cref.get()).data() || {};
+      if (c.status !== 'running') break;
+
+      const day = new Date().toISOString().slice(0, 10);
+      const statRef = db.collection('whatsappCampaignStats').doc(day);
+      const sentToday = Number((await statRef.get()).data()?.sent || 0);
+      if (sentToday >= Number(c.dailyCap || 100)) {
+        await cref.set({ status: 'paused', pausedReason: 'daily_cap' }, { merge: true });
+        log('campaign: وقفت (الحد اليومي)');
+        break;
+      }
+
+      const rs = await cref.collection('recipients').where('status', '==', 'pending').limit(1).get();
+      if (rs.empty) {
+        await cref.set({ status: 'done', finishedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        log('campaign: خلصت');
+        break;
+      }
+      const rd = rs.docs[0];
+      const r = rd.data();
+      const inc = admin.firestore.FieldValue.increment(1);
+
+      const opted = await db.collection('whatsappOptOut').doc(r.waId).get();
+      if (opted.exists) {
+        await rd.ref.set({ status: 'skipped', error: 'opted_out' }, { merge: true });
+        await cref.set({ skipped: inc }, { merge: true });
+        continue;
+      }
+      let found = null;
+      try { found = await sock.onWhatsApp(r.waId); } catch (_) {}
+      if (!found || !found[0]?.exists) {
+        await rd.ref.set({ status: 'skipped', error: 'not_on_whatsapp' }, { merge: true });
+        await cref.set({ skipped: inc }, { merge: true });
+        await sleep(1500 + Math.floor(Math.random() * 1500));
+        continue;
+      }
+      const pnJid = found[0].jid || map.jidFromWaId(r.waId);
+      let lidJid = found[0].lid ? String(found[0].lid) : '';
+      if (lidJid && !lidJid.includes('@')) lidJid += '@lid';
+      const target = lidJid || pnJid;
+      const greeting = r.name ? `أهلاً ${r.name} 👋\n` : '';
+      const body = (greeting + String(c.message || '')).slice(0, 1024);
+      try {
+        await acquireSlot('campaign');
+        if (c.imageUrl && (await imageOk(c.imageUrl))) {
+          await sock.sendMessage(target, { image: { url: c.imageUrl }, caption: body });
+        } else if (c.imageUrl) {
+          throw new Error('image_unavailable');
+        } else {
+          await sock.sendMessage(target, { text: body });
+        }
+        await rd.ref.set({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await cref.set({ sent: inc }, { merge: true });
+        await statRef.set({ sent: inc }, { merge: true });
+        consecutiveFails = 0;
+        sinceBatch++;
+        log('campaign: sent ->', r.waId.replace(/\d{4}$/, '****'));
+      } catch (e) {
+        const err = String(e.message || e).slice(0, 120);
+        await rd.ref.set({ status: 'failed', error: err }, { merge: true });
+        await cref.set({ failed: inc }, { merge: true });
+        consecutiveFails++;
+        log('campaign: failed ->', err);
+        if (consecutiveFails >= 5) {
+          await cref.set({ status: 'paused', pausedReason: 'errors' }, { merge: true });
+          log('campaign: وقفت تلقائي (5 أخطاء ورا بعض)');
+          break;
+        }
+      }
+
+      // تأخير عشوائي بين الرسائل، وراحة أطول بعد كل دفعة
+      if (sinceBatch >= Number(c.batchSize || 10)) {
+        sinceBatch = 0;
+        if (!(await waitWhileRunning(cref, (5 + Math.random() * 5) * 60 * 1000))) break;
+      } else if (!(await waitWhileRunning(cref, (25 + Math.random() * 45) * 1000))) break;
+    }
+  } catch (e) {
+    log('campaign error:', e.message);
+  } finally {
+    campaignBusy = false;
+  }
+}
+setInterval(campaignTick, 20000);
 
 // نبض الجسر: المنصة بتقرأه عشان تعرف الجسر شغال قبل ما تبعت كود تحقق
 async function heartbeat() {
