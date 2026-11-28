@@ -540,14 +540,14 @@ async function campaignTick() {
       const opted = await db.collection('whatsappOptOut').doc(r.waId).get();
       if (opted.exists) {
         await rd.ref.set({ status: 'skipped', error: 'opted_out' }, { merge: true });
-        await cref.set({ skipped: inc }, { merge: true });
+        await cref.set({ skipped: inc, skippedOptOut: inc }, { merge: true });
         continue;
       }
       let found = null;
       try { found = await sock.onWhatsApp(r.waId); } catch (_) {}
       if (!found || !found[0]?.exists) {
         await rd.ref.set({ status: 'skipped', error: 'not_on_whatsapp' }, { merge: true });
-        await cref.set({ skipped: inc }, { merge: true });
+        await cref.set({ skipped: inc, skippedNoWa: inc }, { merge: true });
         await sleep(1500 + Math.floor(Math.random() * 1500));
         continue;
       }
