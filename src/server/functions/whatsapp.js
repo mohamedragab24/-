@@ -209,7 +209,7 @@ async function loadBotSettings() {
       enabled: data.enabled !== false,
       texts: { ...DEFAULT_TEXT, ...Object.fromEntries(Object.entries(data.texts || {}).filter(([, v]) => typeof v === 'string' && v.trim())) },
       extraFaqs: Array.isArray(data.faqs)
-        ? data.faqs.filter((f) => f && f.question && (faqAnswers(f).length > 0))
+        ? data.faqs.filter((f) => f && f.question && (stepsOf(f).length > 0 || faqAnswers(f).length > 0))
         : [],
       menuItems: Array.isArray(data.menuItems)
         ? data.menuItems.filter((m) => m && m.id && m.title && m.enabled !== false).slice(0, 10)
@@ -323,6 +323,44 @@ function faqAnswers(faq) {
 
 const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
+/** أقصى عدد رسايل بتتبعت ورا بعض لخيار/سؤال واحد (حماية من الحظر) */
+const MAX_STEPS = 8;
+
+/** سلسلة الردود messages[] = [{ text, imageUrl }] — كل عنصر رسالة منفصلة بالترتيب */
+function stepsOf(entry) {
+  const list = entry && Array.isArray(entry.messages) ? entry.messages : [];
+  return list
+    .map((s) => ({
+      text: String((s && s.text) || '').trim(),
+      imageUrl: /^https?:\/\//.test(String((s && s.imageUrl) || '')) ? String(s.imageUrl) : '',
+    }))
+    .filter((s) => s.text || s.imageUrl)
+    .slice(0, MAX_STEPS);
+}
+
+/** ردود السؤال: messages[] الجديدة، أو الشكل القديم (answers[] اختيار عشوائي + صورة واحدة) */
+function faqSteps(faq) {
+  const s = stepsOf(faq);
+  if (s.length) return s;
+  const answers = faqAnswers(faq);
+  return answers.length ? [{ text: pickOne(answers), imageUrl: faq.imageUrl || '' }] : [];
+}
+
+/** يبعت الردود ورا بعض (الجسر بيحط فاصل قصير بينهم) ويسجّل كل رسالة */
+async function sendSteps(io, waId, steps, extra = {}) {
+  for (const step of steps) {
+    await sendBotReply(io, waId, step.text, step.imageUrl);
+    await logMessage(waId, `out_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`, {
+      direction: 'out', type: step.imageUrl ? 'image' : 'text', text: step.text, imageUrl: step.imageUrl || '', by: 'bot', status: 'sent', ...extra,
+    });
+  }
+  const last = steps[steps.length - 1] || {};
+  await upsertConversation(waId, {
+    lastOutboundAt: now(), lastMessage: last.text || '[صورة]', lastMessageAt: now(), unread: 0,
+    ...(extra.intent ? { lastIntent: extra.intent } : {}),
+  });
+}
+
 /**
  * يختار أقرب سؤال أضافه الأدمن بالكلمات المفتاحية.
  * الكلمات أقل من 3 حروف يتم تجاهلها (في، من، على...) عشان المطابقة متبقاش عشوائية.
@@ -332,8 +370,9 @@ function matchFaq(text, faqs) {
   let best = null;
   let bestScore = 0;
   for (const faq of faqs || []) {
-    const answers = faqAnswers(faq);
-    if (!answers.length) continue;
+    const steps = faqSteps(faq);
+    if (!steps.length) continue;
+    const answers = steps.map((s) => s.text).filter(Boolean);
     const q = String(faq.question || '').toLowerCase().trim();
     if (!q) continue;
     const words = q.split(/[\s,،\/\|]+/).map((w) => w.trim()).filter((w) => w.length >= 3);
@@ -342,7 +381,7 @@ function matchFaq(text, faqs) {
     for (const w of words) if (t.includes(w)) score += 1;
     if (score > bestScore) {
       bestScore = score;
-      best = { faq, answers };
+      best = { faq, answers, steps };
     }
   }
   return bestScore >= 1 ? best : null;
@@ -387,14 +426,7 @@ async function runBot({ waId, text, name, settings, conversation, io = cloudIO }
   // أسئلة الأدمن لها الأولوية على الردود الجاهزة
   const faqMatch = matchFaq(text, settings.extraFaqs);
   if (faqMatch) {
-    const body = pickOne(faqMatch.answers);
-    await sendBotReply(io, waId, body, faqMatch.faq.imageUrl || '');
-    await upsertConversation(waId, {
-      lastOutboundAt: now(), lastMessage: body, lastMessageAt: now(), lastIntent: 'faq', unread: 0,
-    });
-    await logMessage(waId, `out_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`, {
-      direction: 'out', type: 'text', text: body, by: 'bot', status: 'sent', intent: 'faq', faqId: faqMatch.faq.id || null,
-    });
+    await sendSteps(io, waId, faqMatch.steps, { intent: 'faq', faqId: faqMatch.faq.id || null });
     return { intent: 'faq', faqId: faqMatch.faq.id || null, handoff: false };
   }
 
@@ -421,17 +453,22 @@ async function runMenuChoice({ waId, choiceId, settings, conversation, name, io 
     await upsertConversation(waId, { lastOutboundAt: now(), lastMessage: 'القائمة الرئيسية', lastMessageAt: now() });
     return { intent: 'menu' };
   }
-  const customItem = (settings.menuItems || []).find((m) => String(m.id) === String(choiceId) && (String(m.answer || '').trim() || m.imageUrl));
-  const reply = customItem
-    ? { kind: 'text', body: String(customItem.answer || '').trim() || String(customItem.title) }
-    : await replyFor({ intent: choiceId, texts: settings.texts, extraFaqs: settings.extraFaqs });
-  await sendBotReply(io, waId, reply.body, customItem?.imageUrl || '');
-  await upsertConversation(waId, {
-    lastOutboundAt: now(), lastMessage: reply.body, lastMessageAt: now(), lastIntent: choiceId, unread: 0,
-  });
-  await logMessage(waId, `out_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`, {
-    direction: 'out', type: 'text', text: reply.body, by: 'bot', status: 'sent', intent: choiceId,
-  });
+  const customItem = (settings.menuItems || []).find((m) => String(m.id) === String(choiceId)
+    && (stepsOf(m).length || String(m.answer || '').trim() || m.imageUrl));
+  let steps;
+  if (customItem) {
+    steps = stepsOf(customItem);
+    if (!steps.length) steps = [{ text: String(customItem.answer || '').trim() || String(customItem.title), imageUrl: customItem.imageUrl || '' }];
+  } else {
+    const faq = (settings.extraFaqs || []).find((f) => String(f.id || '') === String(choiceId));
+    const faqS = faq ? faqSteps(faq) : [];
+    if (faqS.length) steps = faqS;
+    else {
+      const reply = await replyFor({ intent: choiceId, texts: settings.texts, extraFaqs: settings.extraFaqs });
+      steps = [{ text: reply.body, imageUrl: '' }];
+    }
+  }
+  await sendSteps(io, waId, steps, { intent: choiceId });
   return { intent: choiceId };
 }
 
@@ -714,6 +751,8 @@ module.exports = {
   config,
   normalizePhone,
   matchFaq,
+  stepsOf,
+  faqSteps,
   DEFAULT_TEXT,
   MENU_ROWS,
 };
