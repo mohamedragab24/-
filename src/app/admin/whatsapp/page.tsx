@@ -22,6 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { getFunctions, httpsCallable } from "@/lib/fn-client";
 import CampaignsTab from "./campaigns-tab";
+import { ImageField, MenuEditor, DEFAULT_MENU, type MenuItem } from "./bot-extras";
 import {
   MessageCircle, Send, Search, Bot, UserRound, Loader2, Copy, CheckCircle2,
   Phone, Clock, Settings2, BookOpen, RefreshCw, ExternalLink, Plus, Trash2, ShieldAlert,
@@ -145,7 +146,9 @@ export default function AdminWhatsApp() {
   const { data: settings } = useDoc(settingsRef);
 
   const [texts, setTexts] = useState<Record<string, string>>(DEFAULT_TEXTS);
-  const [faqs, setFaqs] = useState<{ id: string; question: string; answers: string[] }[]>([]);
+  const [faqs, setFaqs] = useState<{ id: string; question: string; answers: string[]; imageUrl?: string }[]>([]);
+  const [menuItems, setMenuItems] = useState<MenuItem[]>(DEFAULT_MENU.map((x) => ({ ...x })));
+  const [replyImage, setReplyImage] = useState("");
   const [keywords, setKeywords] = useState("");
   const [botOn, setBotOn] = useState(true);
   const [requireOtpOnSignup, setRequireOtpOnSignup] = useState(false);
@@ -159,11 +162,19 @@ export default function AdminWhatsApp() {
       rawFaqs.map((f: any, idx: number) => ({
         id: String(f?.id || `faq_${idx}_${Date.now()}`),
         question: String(f?.question || ""),
+        imageUrl: String(f?.imageUrl || ""),
         answers: Array.isArray(f?.answers) && f.answers.length
           ? f.answers.map((a: any) => String(a))
           : f?.answer ? [String(f.answer)] : [""],
       }))
     );
+    const rawMenu = Array.isArray((settings as any).menuItems) ? (settings as any).menuItems : [];
+    if (rawMenu.length) {
+      setMenuItems(rawMenu.map((m: any, idx: number) => ({
+        id: String(m?.id || `custom_${idx}`), title: String(m?.title || ""), description: String(m?.description || ""),
+        answer: String(m?.answer || ""), imageUrl: String(m?.imageUrl || ""), enabled: m?.enabled !== false,
+      })));
+    }
     setKeywords(Array.isArray((settings as any).handoffKeywords) ? (settings as any).handoffKeywords.join(", ") : "");
     setBotOn((settings as any).enabled !== false);
     setRequireOtpOnSignup((settings as any).requireOtpOnSignup === true);
@@ -201,14 +212,14 @@ export default function AdminWhatsApp() {
   const token = async () => (user ? user.getIdToken() : null);
 
   const handleSend = async () => {
-    if (!selectedId || !reply.trim()) return;
+    if (!selectedId || (!reply.trim() && !replyImage)) return;
     setSending(true);
     try {
       const idToken = await token();
       const res = await fetch("/api/whatsapp/send", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({ waId: selectedId, text: reply }),
+        body: JSON.stringify({ waId: selectedId, text: reply, imageUrl: replyImage }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -216,6 +227,7 @@ export default function AdminWhatsApp() {
         return;
       }
       setReply("");
+      setReplyImage("");
     } catch (e: any) {
       toast({ variant: "destructive", title: "لم يتم الإرسال", description: String(e?.message || e) });
     } finally {
@@ -250,7 +262,12 @@ export default function AdminWhatsApp() {
               id: f.id,
               question: f.question.trim(),
               answers: (f.answers || []).map((a) => a.trim()).filter(Boolean),
+              imageUrl: f.imageUrl || "",
             })),
+          menuItems: menuItems
+            .filter((m) => m.title.trim())
+            .slice(0, 10)
+            .map((m) => ({ id: m.id, title: m.title.trim(), description: m.description.trim(), answer: m.answer.trim(), imageUrl: m.imageUrl || "", enabled: m.enabled })),
           handoffKeywords: keywords.split(",").map((s) => s.trim()).filter(Boolean),
           updatedAt: new Date().toISOString(),
           updatedBy: user?.uid || null,
@@ -403,7 +420,8 @@ export default function AdminWhatsApp() {
                         return (
                           <div key={m.id} className={`flex ${out ? "justify-start" : "justify-end"}`}>
                             <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${out ? "bg-emerald-600 text-white" : "bg-white border"}`}>
-                              {m.text || `[${m.type}]`}
+                              {m.imageUrl && <img src={m.imageUrl} alt="" className="rounded-lg mb-1 max-h-48" />}
+                              {m.text || (m.imageUrl ? "" : `[${m.type}]`)}
                               <div className={`text-[10px] mt-1 flex items-center gap-2 ${out ? "text-emerald-100" : "text-muted-foreground"}`}>
                                 {out && (m.by === "human" ? <UserRound size={10} /> : <Bot size={10} />)}
                                 <span>{m.by === "human" ? "موظف" : out ? "بوت" : "العميل"}</span>
@@ -429,10 +447,11 @@ export default function AdminWhatsApp() {
                           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSend();
                         }}
                       />
-                      <Button onClick={handleSend} disabled={sending || !reply.trim()} className="rounded-xl h-auto px-6 gap-2">
+                      <Button onClick={handleSend} disabled={sending || (!reply.trim() && !replyImage)} className="rounded-xl h-auto px-6 gap-2">
                         {sending ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />} إرسال
                       </Button>
                     </div>
+                    <ImageField value={replyImage} onChange={setReplyImage} label="صورة" />
                     <p className="text-[11px] text-muted-foreground">Ctrl + Enter للإرسال. الردود من هنا بتتسجل باسمك في إشعارات الأدمن.</p>
                   </div>
                 </>
@@ -485,6 +504,15 @@ export default function AdminWhatsApp() {
 
           <Card className="rounded-2xl">
             <CardHeader>
+              <CardTitle className="text-lg font-black">خيارات القائمة الرئيسية</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <MenuEditor items={menuItems} setItems={setMenuItems} />
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl">
+            <CardHeader>
               <CardTitle className="text-lg font-black">أسئلة وأجوبة البوت</CardTitle>
               <p className="text-xs text-muted-foreground">كل سؤال تقدر تحطله أكتر من رد، والبوت يختار واحد منهم عشوائي كل مرة عشان الكلام ميبقاش مكرر.</p>
             </CardHeader>
@@ -508,6 +536,7 @@ export default function AdminWhatsApp() {
                     </Button>
                   </div>
 
+                  <ImageField value={f.imageUrl || ""} onChange={(url) => setFaqs((list) => list.map((x, idx) => (idx === i ? { ...x, imageUrl: url } : x)))} label="صورة مع الرد" />
                   <div className="space-y-2">
                     {(f.answers || []).map((answer, ai) => (
                       <div key={ai} className="flex gap-2 items-start">
